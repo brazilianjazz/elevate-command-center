@@ -185,6 +185,7 @@ const Sync = {
       }else{
         await this.push(true);          // first time: seed cloud from this device
       }
+      ensureCycle();                    // roll 2025 template → 2026 once (after remote applied)
     }catch(e){ console.warn(e); }
     // live updates from other devices
     if(this.unsub) this.unsub();
@@ -283,18 +284,18 @@ function updateSyncBadge(){
 /* ---------- DEFAULTS ---------- */
 const DEFAULT_SETTINGS = {
   publicGoal: 2500, realTarget: 10000, aovTarget: 134, backerTarget: 75,
-  launchDate: '2025-10-15', endDate: '2025-11-14',
+  launchDate: '2025-10-15', endDate: '2025-11-14',  // template baseline; ensureCycle() rolls +1yr → 2026
   vipMin: 100, vipTarget: 150, optinsMin: 300, optinsTarget: 500, kfollowMin: 200,
   ksWorkerUrl: '', ksProjectUrl: ''
 };
 
 const PHASES = [
-  { key:'p1', label:'Phase 1 · Research',     start:'2025-06-05', end:'2025-07-14', color:'#c8953a' },
-  { key:'p2', label:'Phase 2 · Decisions',    start:'2025-06-25', end:'2025-07-14', color:'#b07f34' },
-  { key:'p3', label:'Phase 3 · Planning',     start:'2025-07-14', end:'2025-09-01', color:'#6a9e6a' },
-  { key:'p4pre', label:'Phase 4 · Pre-Launch',start:'2025-09-01', end:'2025-10-15', color:'#c8763a' },
-  { key:'p4live', label:'Phase 4 · Live',     start:'2025-10-15', end:'2025-11-14', color:'#c85a3a' },
-  { key:'p5', label:'Phase 5 · Fulfillment',  start:'2025-11-14', end:'2026-02-28', color:'#8a8478' },
+  { key:'p1', label:'Phase 1 · Research',     start:'2026-06-05', end:'2026-07-14', color:'#c8953a' },
+  { key:'p2', label:'Phase 2 · Decisions',    start:'2026-06-25', end:'2026-07-14', color:'#b07f34' },
+  { key:'p3', label:'Phase 3 · Planning',     start:'2026-07-14', end:'2026-09-01', color:'#6a9e6a' },
+  { key:'p4pre', label:'Phase 4 · Pre-Launch',start:'2026-09-01', end:'2026-10-15', color:'#c8763a' },
+  { key:'p4live', label:'Phase 4 · Live',     start:'2026-10-15', end:'2026-11-14', color:'#c85a3a' },
+  { key:'p5', label:'Phase 5 · Fulfillment',  start:'2026-11-14', end:'2027-02-28', color:'#8a8478' },
 ];
 const phaseLabel = (k) => (PHASES.find(p=>p.key===k)||{}).label || k;
 
@@ -508,6 +509,28 @@ function ensureSeed(){
   if (load('postmortem', null) === null) save('postmortem', { ratings:{}, worked:'', change:'', lesson:'' });
 }
 
+/* One-time roll-forward: the campaign template was authored on 2025 dates.
+   Shift every stored date +1 year so the timeline lands on the real 2026 cycle.
+   The guard lives inside settings._cycle, which is synced, so it runs exactly
+   once per account and is safe across devices and sign-in races. */
+function shiftYr(d, by){ const m=/^(\d{4})(-\d{2}-\d{2})$/.exec(d||''); return m ? (Number(m[1])+by)+m[2] : d; }
+function ensureCycle(){
+  const TARGET='2026';
+  const s = load('settings', {});
+  if (s._cycle === TARGET) return false;
+  const by = 1;
+  ['launchDate','endDate'].forEach(k=>{ if(s[k]) s[k]=shiftYr(s[k],by); });
+  s._cycle = TARGET;
+  const tasks=load('tasks',[]);   tasks.forEach(t=> t.due=shiftYr(t.due,by));
+  const emails=load('emails',[]); emails.forEach(e=>{ e.planned=shiftYr(e.planned,by); e.actual=shiftYr(e.actual,by); });
+  const social=load('social',[]); social.forEach(c=> c.date=shiftYr(c.date,by));
+  const prelog=load('prelog',[]); prelog.forEach(r=> r.date=shiftYr(r.date,by));
+  const livelog=load('livelog',[]); livelog.forEach(r=> r.date=shiftYr(r.date,by));
+  save('tasks',tasks); save('emails',emails); save('social',social); save('prelog',prelog); save('livelog',livelog);
+  save('settings', s);
+  return true;
+}
+
 /* ---------- DERIVED METRICS ---------- */
 function settings(){ return Object.assign({}, DEFAULT_SETTINGS, load('settings', {})); }
 
@@ -611,7 +634,7 @@ function renderDashboard(v){
     <div>
       <div class="text-xs uppercase tracking-wider text-cream/50">Campaign Status</div>
       <div class="text-2xl font-extrabold" style="color:${phColor}">${ph.label}</div>
-      <div class="text-sm text-cream/70">Elevate · Dr. Gabriel Santiago · Kickstarter</div>
+      <div class="text-sm text-cream/70">Elevate · Gabriel Santiago · Kickstarter</div>
     </div>
     <div class="text-right">
       <div class="text-3xl font-extrabold text-amber">${countdownTxt}</div>
@@ -724,7 +747,7 @@ function renderTimeline(v){
 
   // Gantt
   html += `<div class="card p-5 mb-5">
-    ${sectionTitle('Timeline — Phase Gantt', 'June 2025 → post-fulfillment')}
+    ${sectionTitle('Timeline — Phase Gantt', 'June 2026 → post-fulfillment')}
     <div style="height:230px"><canvas id="ganttChart"></canvas></div>
   </div>`;
 
@@ -818,11 +841,11 @@ function drawGantt(){
   const ctx=$('ganttChart'); if(!ctx) return;
   const tasks=load('tasks',[]);
   // Self-contained linear time axis: x = days since base (no date-adapter CDN needed).
-  const base = parseD('2025-06-01').getTime();
+  const base = parseD('2026-06-01').getTime();
   const off = (d)=> (parseD(d).getTime()-base)/864e5;
-  const maxOff = off('2026-03-01');
-  const months=[]; let m=new Date(2025,5,1);
-  while(m<=new Date(2026,2,1)){ months.push({ v:(m.getTime()-base)/864e5, l:m.toLocaleDateString('en',{month:'short',year:'2-digit'}) }); m=new Date(m.getFullYear(), m.getMonth()+1, 1); }
+  const maxOff = off('2027-03-01');
+  const months=[]; let m=new Date(2026,5,1);
+  while(m<=new Date(2027,2,1)){ months.push({ v:(m.getTime()-base)/864e5, l:m.toLocaleDateString('en',{month:'short',year:'2-digit'}) }); m=new Date(m.getFullYear(), m.getMonth()+1, 1); }
 
   const labels = PHASES.map(p=>p.label);
   const data = PHASES.map(p=>[ off(p.start), off(p.end) ]);
@@ -1224,7 +1247,7 @@ function renderPostmortem(v){
 
   function genHistory(){
     const p=load('postmortem',{ratings:{},worked:'',change:'',lesson:''});
-    return `Elevate — Kickstarter campaign by Dr. Gabriel Santiago. Launched ${s.launchDate}, closed ${s.endDate}. `+
+    return `Elevate — Kickstarter campaign by Gabriel Santiago. Launched ${s.launchDate}, closed ${s.endDate}. `+
       `Raised ${money(revenue)} from ${backers} backers (final AOV ${money2(aov)}; public goal ${money(s.publicGoal)}, real target ${money(s.realTarget)}). `+
       (topRev?`Top tier by revenue was ${topRev.n}; `:'')+(topBk?`top tier by backers was ${topBk.n}. `:'')+
       `Reached the public goal in ${daysToGoal}. `+
@@ -1395,6 +1418,7 @@ function renderSettings(v){
    BOOT
    ============================================================ */
 ensureSeed();
+ensureCycle();
 renderNav();
 render();
 Sync.init();
