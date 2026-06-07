@@ -510,18 +510,21 @@ function ensureSeed(){
   if (load('postmortem', null) === null) save('postmortem', { ratings:{}, worked:'', change:'', lesson:'' });
 }
 
-/* One-time roll-forward: the campaign template was authored on 2025 dates.
-   Shift every stored date +1 year so the timeline lands on the real 2026 cycle.
-   The guard lives inside settings._cycle, which is synced, so it runs exactly
-   once per account and is safe across devices and sign-in races. */
+/* Roll-forward: the campaign template was authored on 2025 dates. We pin the
+   timeline to a target launch YEAR and shift every stored date by the same
+   delta. This is self-correcting and idempotent — no "done" flag to get stuck
+   on. If launch is 2025 it shifts everything +1 to 2026; once launch is 2026
+   the delta is 0 and it does nothing. Safe to call on every data change. */
+const TARGET_LAUNCH_YEAR = 2026;
 function shiftYr(d, by){ const m=/^(\d{4})(-\d{2}-\d{2})$/.exec(d||''); return m ? (Number(m[1])+by)+m[2] : d; }
 function ensureCycle(){
-  const TARGET='2026';
   const s = load('settings', {});
-  if (s._cycle === TARGET) return false;
-  const by = 1;
-  ['launchDate','endDate'].forEach(k=>{ if(s[k]) s[k]=shiftYr(s[k],by); });
-  s._cycle = TARGET;
+  const cur = parseInt(String(s.launchDate||'2025-10-15').slice(0,4),10) || 2025;
+  const by = TARGET_LAUNCH_YEAR - cur;
+  if (!by) return false;
+  if (s.launchDate) s.launchDate = shiftYr(s.launchDate, by);
+  if (s.endDate)    s.endDate    = shiftYr(s.endDate, by);
+  delete s._cycle; // legacy flag — no longer used
   const tasks=load('tasks',[]);   tasks.forEach(t=> t.due=shiftYr(t.due,by));
   const emails=load('emails',[]); emails.forEach(e=>{ e.planned=shiftYr(e.planned,by); e.actual=shiftYr(e.actual,by); });
   const social=load('social',[]); social.forEach(c=> c.date=shiftYr(c.date,by));
