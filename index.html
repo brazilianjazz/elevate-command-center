@@ -1,0 +1,1403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Elevate Command Center</title>
+<meta name="description" content="Campaign command center for the Elevate Kickstarter by Dr. Gabriel Santiago." />
+
+<!-- Inter font -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+<!-- Tailwind (Play CDN) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<!-- Firebase (compat SDK — for cloud sync; app works fully offline if not configured) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink:     '#1a1a1a',
+          panel:   '#242424',
+          panel2:  '#2c2c2c',
+          edge:    '#333333',
+          cream:   '#f0ece4',
+          amber:   '#c8953a',
+          good:    '#6a9e6a',
+          warn:    '#c8763a',
+          danger:  '#c85a3a',
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        },
+      },
+    },
+  };
+</script>
+
+<style>
+  html, body { background:#1a1a1a; color:#f0ece4; }
+  body { font-family:'Inter', system-ui, sans-serif; }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-track { background:#1a1a1a; }
+  ::-webkit-scrollbar-thumb { background:#3a3a3a; border-radius:6px; }
+  .tabbtn.active { color:#c8953a; border-bottom-color:#c8953a; }
+  .tabbtn { border-bottom:2px solid transparent; }
+  input, select, textarea {
+    background:#1a1a1a; color:#f0ece4; border:1px solid #333; border-radius:8px;
+    padding:6px 10px; font-size:13px; outline:none;
+  }
+  input:focus, select:focus, textarea:focus { border-color:#c8953a; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:8px 10px; border-bottom:1px solid #333; text-align:left; font-size:13px; vertical-align:top; }
+  th { color:#bdb6a8; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .card { background:#242424; border:1px solid #333; border-radius:14px; }
+  details > summary { list-style:none; cursor:pointer; }
+  details > summary::-webkit-details-marker { display:none; }
+  .bar-track { background:#1a1a1a; border:1px solid #333; border-radius:999px; overflow:hidden; height:14px; }
+  .bar-fill { height:100%; border-radius:999px; transition:width .4s ease; }
+  .chip { font-size:11px; padding:2px 8px; border-radius:999px; font-weight:600; }
+  input[type=range]{ -webkit-appearance:none; appearance:none; height:6px; background:#1a1a1a; border-radius:999px; border:1px solid #333; padding:0; }
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:18px; height:18px; border-radius:50%; background:#c8953a; cursor:pointer; }
+  input[type=range]::-moz-range-thumb{ width:18px; height:18px; border:none; border-radius:50%; background:#c8953a; cursor:pointer; }
+  .empty { color:#8a8478; font-size:13px; padding:18px; text-align:center; font-style:italic; }
+</style>
+</head>
+<body class="min-h-screen pb-24">
+
+<!-- NAV -->
+<nav class="fixed top-0 inset-x-0 z-40 bg-panel/95 backdrop-blur border-b border-edge">
+  <div class="max-w-7xl mx-auto px-4">
+    <div class="flex items-center justify-between h-14">
+      <div class="flex items-center gap-2 shrink-0">
+        <span class="text-amber text-lg font-extrabold tracking-tight">ELEVATE</span>
+        <span class="text-xs text-cream/50 hidden md:inline">Command Center</span>
+        <span id="syncBadge" class="chip ml-1" title="Cloud sync status" style="background:#2c2c2c;color:#8a8478">Local only</span>
+      </div>
+      <div id="navtabs" class="flex items-center gap-1 overflow-x-auto no-scrollbar text-sm font-medium"></div>
+    </div>
+  </div>
+</nav>
+
+<main class="max-w-7xl mx-auto px-4 pt-20">
+  <div id="view"></div>
+</main>
+
+<script>
+/* ============================================================
+   ELEVATE COMMAND CENTER  v1.0
+   Single-file. Vanilla JS. localStorage. Prefix: elevate_
+   ============================================================ */
+
+const K = (s) => 'elevate_' + s;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = (n) => '$' + Math.round(Number(n)||0).toLocaleString();
+const money2 = (n) => '$' + (Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const pct = (a,b) => b>0 ? Math.min(999, (a/b)*100) : 0;
+const today = () => new Date().toISOString().slice(0,10);
+const parseD = (s) => s ? new Date(s + 'T00:00:00') : null;
+
+function load(key, fallback){
+  try { const v = localStorage.getItem(K(key)); return v===null ? fallback : JSON.parse(v); }
+  catch(e){ return fallback; }
+}
+function save(key, val){ localStorage.setItem(K(key), JSON.stringify(val)); if(!Sync.applyingRemote) Sync.schedulePush(); }
+
+/* ============================================================
+   CLOUD SYNC  (Firebase Firestore + Google sign-in)
+   The app works fully offline with localStorage only.
+   If a Firebase config + sign-in are present, all campaign data
+   syncs live across every device for the signed-in user.
+   ------------------------------------------------------------
+   OPTION A: paste your Firebase config object below (then every
+   device that loads this file is pre-wired — just sign in).
+   OPTION B: leave it blank and paste the config in Settings on
+   each device. A value pasted in Settings always wins.
+   The Firebase web config is NOT a secret — it is safe to commit.
+   ============================================================ */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDoyMyYgKU0JSCs9hdStyM7P5_WNmQsxys",
+  authDomain: "elevate-command-center.firebaseapp.com",
+  projectId: "elevate-command-center",
+  storageBucket: "elevate-command-center.firebasestorage.app",
+  messagingSenderId: "310771986061",
+  appId: "1:310771986061:web:5a49d1ad04510285ee3cc4",
+  measurementId: "G-89VXQ1SSGF"
+};
+
+const SYNC_KEYS = ['tasks','tiers','suppliers','budget','emails','social','settings','prelog','livelog','postmortem'];
+
+const Sync = {
+  ready:false, user:null, db:null, status:'off', applyingRemote:false,
+  myRev:null, unsub:null, pushTimer:null,
+
+  config(){
+    const local = load('fbconfig', null);
+    const cfg = (local && local.apiKey) ? local : FIREBASE_CONFIG;
+    return (cfg && cfg.apiKey) ? cfg : null;
+  },
+  setStatus(s){ this.status=s; updateSyncBadge(); },
+
+  init(){
+    const cfg = this.config();
+    if(!cfg){ this.setStatus('off'); return; }
+    if(typeof firebase==='undefined'){ this.setStatus('error'); return; }
+    try{
+      if(!firebase.apps.length) firebase.initializeApp(cfg);
+      this.db = firebase.firestore();
+      this.ready = true;
+      this.setStatus('signedout');
+      firebase.auth().onAuthStateChanged(u=>{ this.user=u; u? this.onSignedIn() : this.onSignedOut(); });
+    }catch(e){ console.warn('Firebase init failed', e); this.setStatus('error'); }
+  },
+
+  signIn(){
+    if(!this.ready){ alert('Add your Firebase config in Settings first.'); return; }
+    const provider = new firebase.auth.GoogleAuthProvider();
+    firebase.auth().signInWithPopup(provider).catch(e=>{ alert('Sign-in failed: '+e.message); });
+  },
+  signOut(){ if(this.ready) firebase.auth().signOut(); },
+
+  collect(){ const o={}; SYNC_KEYS.forEach(k=>{ const v=localStorage.getItem(K(k)); if(v!==null) o[k]=v; }); return o; },
+  apply(data){
+    if(!data) return;
+    this.applyingRemote = true;
+    SYNC_KEYS.forEach(k=>{ if(data[k]!==undefined) localStorage.setItem(K(k), data[k]); });
+    this.applyingRemote = false;
+  },
+
+  async onSignedIn(){
+    this.setStatus('syncing');
+    const ref = this.db.collection('users').doc(this.user.uid);
+    try{
+      const snap = await ref.get();
+      if(snap.exists && snap.data().data){
+        this.apply(snap.data().data);   // cloud is the source of truth on sign-in
+      }else{
+        await this.push(true);          // first time: seed cloud from this device
+      }
+    }catch(e){ console.warn(e); }
+    // live updates from other devices
+    if(this.unsub) this.unsub();
+    this.unsub = ref.onSnapshot(doc=>{
+      if(!doc.exists) return;
+      const d = doc.data();
+      if(d.rev && d.rev === this.myRev) return;  // ignore our own write echo
+      this.apply(d.data);
+      this.setStatus('synced');
+      try{ render(); }catch(e){}
+    }, err=>{ console.warn(err); this.setStatus('error'); });
+    this.setStatus('synced');
+    try{ render(); }catch(e){}
+  },
+  onSignedOut(){ if(this.unsub){ this.unsub(); this.unsub=null; } this.setStatus(this.ready?'signedout':'off'); },
+
+  schedulePush(){
+    if(!this.ready || !this.user) return;
+    this.setStatus('syncing');
+    clearTimeout(this.pushTimer);
+    this.pushTimer = setTimeout(()=>this.push(), 900);
+  },
+  async push(silent){
+    if(!this.ready || !this.user) return;
+    this.myRev = uid()+Date.now();
+    try{
+      await this.db.collection('users').doc(this.user.uid).set({
+        data: this.collect(), rev: this.myRev, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      if(!silent) this.setStatus('synced');
+    }catch(e){ console.warn('push failed', e); this.setStatus('error'); }
+  },
+};
+
+/* ============================================================
+   KICKSTARTER PULL  (via your Cloudflare Worker proxy)
+   The worker fetches your public project page server-side and
+   returns { pledged, backers, goal, name, currency }.
+   We reconcile those running TOTALS into today's live-log entry
+   so cumulative revenue/backers exactly match Kickstarter.
+   ============================================================ */
+async function pullKickstarter(){
+  const s = settings();
+  if(!s.ksWorkerUrl) throw new Error('Add your Cloudflare Worker URL in Settings.');
+  if(!s.ksProjectUrl) throw new Error('Add your Kickstarter project URL in Settings.');
+  const url = s.ksWorkerUrl.replace(/\/+$/,'') + '/?url=' + encodeURIComponent(s.ksProjectUrl);
+  const res = await fetch(url, { headers:{ 'Accept':'application/json' } });
+  if(!res.ok) throw new Error('Worker responded '+res.status);
+  const d = await res.json();
+  if(d.error) throw new Error(d.error);
+  if(d.pledged==null && d.backers==null) throw new Error('Could not read numbers from the project page.');
+  return d;
+}
+function applyKickstarterTotals(pledged, backers){
+  const t = today();
+  const log = load('livelog', []);
+  const prior = log.filter(e=>e.date < t);
+  const priorRev = prior.reduce((a,e)=>a+(Number(e.revenue)||0),0);
+  const priorBk  = prior.reduce((a,e)=>a+(Number(e.backers)||0),0);
+  const dRev = Math.max(0, Math.round((Number(pledged)||0) - priorRev));
+  const dBk  = Math.max(0, (Number(backers)||0) - priorBk);
+  const ex = log.find(e=>e.date===t);
+  if(ex){ ex.revenue=dRev; ex.backers=dBk; ex.notes='Kickstarter auto-pull'; }
+  else log.push({ date:t, revenue:dRev, backers:dBk, notes:'Kickstarter auto-pull' });
+  save('livelog', log);
+}
+async function doKickstarterPull(btn){
+  const old = btn ? btn.textContent : '';
+  if(btn){ btn.disabled=true; btn.textContent='Pulling…'; }
+  try{
+    const d = await pullKickstarter();
+    applyKickstarterTotals(d.pledged, d.backers);
+    render();
+    alert(`Pulled from Kickstarter${d.name?(' ("'+d.name+'")'):''}:\n\nTotal pledged: ${money(d.pledged)}\nBackers: ${d.backers}${d.goal?('\nGoal: '+money(d.goal)):''}\n\nToday's live-log entry was updated to match.`);
+  }catch(e){
+    alert('Kickstarter pull failed:\n\n'+e.message+'\n\n(Common causes: worker URL or project URL not set in Settings, or the worker is not deployed yet.)');
+  }finally{ if(btn){ btn.disabled=false; btn.textContent=old; } }
+}
+
+function updateSyncBadge(){
+  const el = document.getElementById('syncBadge'); if(!el) return;
+  const map = {
+    off:     ['Local only', '#8a8478', '#2c2c2c'],
+    signedout:['Sign in to sync', '#c8953a', '#3a2f18'],
+    syncing: ['Syncing…', '#c8763a', '#3a2a18'],
+    synced:  ['Synced ✓', '#6a9e6a', '#1f2a1f'],
+    error:   ['Sync error', '#c85a3a', '#3a1f18'],
+  };
+  const [txt,color,bg] = map[Sync.status] || map.off;
+  const who = (Sync.status==='synced' && Sync.user) ? ' · '+(Sync.user.email||'') : '';
+  el.textContent = txt + who;
+  el.style.color = color; el.style.background = bg;
+  el.style.cursor = (Sync.status==='signedout') ? 'pointer' : 'default';
+}
+
+/* ---------- DEFAULTS ---------- */
+const DEFAULT_SETTINGS = {
+  publicGoal: 2500, realTarget: 10000, aovTarget: 134, backerTarget: 75,
+  launchDate: '2025-10-15', endDate: '2025-11-14',
+  vipMin: 100, vipTarget: 150, optinsMin: 300, optinsTarget: 500, kfollowMin: 200,
+  ksWorkerUrl: '', ksProjectUrl: ''
+};
+
+const PHASES = [
+  { key:'p1', label:'Phase 1 · Research',     start:'2025-06-05', end:'2025-07-14', color:'#c8953a' },
+  { key:'p2', label:'Phase 2 · Decisions',    start:'2025-06-25', end:'2025-07-14', color:'#b07f34' },
+  { key:'p3', label:'Phase 3 · Planning',     start:'2025-07-14', end:'2025-09-01', color:'#6a9e6a' },
+  { key:'p4pre', label:'Phase 4 · Pre-Launch',start:'2025-09-01', end:'2025-10-15', color:'#c8763a' },
+  { key:'p4live', label:'Phase 4 · Live',     start:'2025-10-15', end:'2025-11-14', color:'#c85a3a' },
+  { key:'p5', label:'Phase 5 · Fulfillment',  start:'2025-11-14', end:'2026-02-28', color:'#8a8478' },
+];
+const phaseLabel = (k) => (PHASES.find(p=>p.key===k)||{}).label || k;
+
+/* Full pre-populated task / checklist source.  Single source of truth:
+   the Timeline master list and the Phase Checklists read/write the same store. */
+const SEED_TASKS = [
+  // PHASE 1
+  ['p1','Find 3-5 comparable Kickstarter campaigns in contemporary instrumental and guitar space','2025-06-18','High'],
+  ['p1','Complete Campaign X-Ray for each comparable campaign','2025-06-25','High'],
+  ['p1','Note tier structures, price points, backer counts, AOV for each','2025-06-25','Medium'],
+  ['p1','Pull Discmakers quote for 100 CDs with custom packaging','2025-06-25','High'],
+  ['p1','Pull Discmakers quote for 100 vinyl with full color jacket','2025-06-25','High'],
+  ['p1','Get t-shirt supplier quotes (Printful or local print shop)','2025-07-01','Medium'],
+  ['p1','Write one-paragraph research summary of what is winning in contemporary instrumental music on Kickstarter','2025-07-07','Medium'],
+  ['p1','Identify backup supplier for CD and vinyl manufacturing','2025-07-10','Medium'],
+  // PHASE 2
+  ['p2','Confirm Kickstarter as platform','2025-07-01','High'],
+  ['p2','Lock public funding goal at $2,500','2025-07-01','High'],
+  ['p2','Lock real revenue target at $10,000','2025-07-01','High'],
+  ['p2','Confirm 30-day campaign duration','2025-07-01','Medium'],
+  ['p2','Confirm October 15 launch date','2025-07-01','High'],
+  ['p2','Make VA decision for fulfillment phase','2025-07-10','Medium'],
+  ['p2','Lock tier structure: 6 tiers as defined','2025-07-10','High'],
+  ['p2','Confirm dip release items: t-shirt bundle and handwritten lead sheet (3 at $350)','2025-07-12','Medium'],
+  ['p2','Confirm add-on: t-shirt at $35 with Tier 3 and above','2025-07-12','Medium'],
+  ['p2','Lock campaign duration: 30 days, closes November 14','2025-07-14','Medium'],
+  // PHASE 3
+  ['p3','Write deep-dive survey using co-creator framing','2025-07-21','High'],
+  ['p3','Deploy survey to BGI email list','2025-07-25','High'],
+  ['p3','Deploy survey to @gabrielsantiago Instagram','2025-07-25','Medium'],
+  ['p3','Analyze survey results and note key language from responses','2025-08-01','High'],
+  ['p3','Write full campaign page copy: origin story, about, why back, funding breakdown, timeline, tiers, shipping, FAQ, risks','2025-08-10','High'],
+  ['p3','Write $1 VIP landing page copy','2025-08-01','High'],
+  ['p3','Build $1 VIP landing page (website / Leadpages / Carrd)','2025-08-04','High'],
+  ['p3','Write pre-launch welcome email sequence (3 emails for new $1 VIP opt-ins)','2025-08-08','Medium'],
+  ['p3','Write launch day email sequence (2 emails)','2025-08-12','High'],
+  ['p3','Write mid-campaign update emails (3 emails)','2025-08-15','Medium'],
+  ['p3','Write dip response email (1 email, deploy with dip release)','2025-08-15','Medium'],
+  ['p3','Write 48-hour final push sequence (2 emails)','2025-08-18','Medium'],
+  ['p3','Write post-campaign thank you email (1 email)','2025-08-20','Low'],
+  ['p3','Write backer survey email (1 email)','2025-08-20','Low'],
+  ['p3','Plan visual mockups for vinyl jacket, CD, and songbook PDF cover','2025-08-10','Medium'],
+  ['p3','Commission or produce visual mockups','2025-08-20','High'],
+  ['p3','Write pitch video script','2025-08-12','High'],
+  ['p3','Record and edit pitch video','2025-08-25','High'],
+  ['p3','Submit Kickstarter campaign draft for review','2025-08-28','High'],
+  ['p3','Set up Meta Ads Manager custom audience (FB engagers + site visitors, last 365 days)','2025-08-20','Medium'],
+  ['p3','Design follower ad creative for Meta','2025-08-25','Medium'],
+  ['p3','Design $1 VIP ad creative for Meta','2025-08-25','Medium'],
+  ['p3','Set up Kickstarter add-on for t-shirt at $35','2025-08-28','Low'],
+  ['p3','Confirm Discmakers production specs and file requirements','2025-08-28','Medium'],
+  ['p3','Place Discmakers test order or confirm file approval','2025-08-30','Medium'],
+  // PHASE 4 PRE-LAUNCH
+  ['p4pre','Kickstarter pre-launch page live September 1','2025-09-01','High'],
+  ['p4pre','Follower ad live on Meta September 1, budget $5-10/day','2025-09-01','High'],
+  ['p4pre','$1 VIP landing page ad live September 1, budget $10-15/day','2025-09-01','High'],
+  ['p4pre','Warm audience retargeting active on Meta','2025-09-01','Medium'],
+  ['p4pre','Post daily on @gabrielsantiago starting September 1','2025-09-01','Medium'],
+  ['p4pre','Track $1 VIP count every week and log in Numbers Tracker','2025-09-08','Medium'],
+  ['p4pre','Track Kickstarter pre-launch followers every week','2025-09-08','Medium'],
+  ['p4pre','Activate street team group October 1 (BGI mentorship students as core)','2025-10-01','High'],
+  ['p4pre','Give street team referral tracking links','2025-10-01','Medium'],
+  ['p4pre','Send pre-launch announcement email to full BGI list October 8','2025-10-08','High'],
+  ['p4pre','Send $1 VIP early access reminder email October 14','2025-10-14','High'],
+  ['p4pre','Verify all Kickstarter tier descriptions and pricing are correct','2025-10-13','High'],
+  ['p4pre','Confirm all campaign page assets uploaded and approved','2025-10-14','High'],
+  ['p4pre','Confirm pitch video uploaded','2025-10-14','High'],
+  ['p4pre','Confirm shipping rates configured in Kickstarter','2025-10-14','Medium'],
+  ['p4pre','Final review of all email sequences October 14','2025-10-14','High'],
+  ['p4pre','Schedule launch day emails for October 15','2025-10-14','High'],
+  // PHASE 4 LIVE
+  ['p4live','Send launch email to $1 VIP list first on October 15','2025-10-15','High'],
+  ['p4live','Send launch email to full BGI list within one hour of VIP send','2025-10-15','High'],
+  ['p4live','Post launch announcement on @gabrielsantiago Instagram','2025-10-15','High'],
+  ['p4live','Post launch announcement on @brazilianguitarinstitute Instagram','2025-10-15','Medium'],
+  ['p4live','Post launch announcement on Facebook @gabrielsantiago','2025-10-15','High'],
+  ['p4live','Post launch announcement on YouTube community tab','2025-10-15','Medium'],
+  ['p4live','Monitor campaign hourly on day one','2025-10-15','Medium'],
+  ['p4live','Hit $2,500 public goal within 72 hours','2025-10-18','High'],
+  ['p4live','Post daily during week 1','2025-10-22','Medium'],
+  ['p4live','Monitor for dip (expected days 8-12 of campaign)','2025-10-27','Medium'],
+  ['p4live','Send mid-campaign update email week 2','2025-10-29','Medium'],
+  ['p4live','Release t-shirt bundle add-on at dip with dedicated email','2025-10-27','High'],
+  ['p4live','Release handwritten lead sheet tier (3 available, $350) at dip','2025-10-27','High'],
+  ['p4live','Run Instagram Live during dip week','2025-10-28','Medium'],
+  ['p4live','Send second mid-campaign update email week 3','2025-11-05','Medium'],
+  ['p4live','Begin 48-hour final push November 12','2025-11-12','High'],
+  ['p4live','Send 48-hour push email November 12','2025-11-12','High'],
+  ['p4live','Send final hours email November 13-14','2025-11-13','High'],
+  ['p4live','Post countdown daily during final week','2025-11-13','Medium'],
+  ['p4live','Campaign closes November 14','2025-11-14','High'],
+  // PHASE 5
+  ['p5','Send backer survey within one week of campaign close','2025-11-18','High'],
+  ['p5','Collect all shipping addresses via Kickstarter backer survey','2025-11-21','High'],
+  ['p5','Run add-on order window: offer t-shirt to backers who did not select it','2025-11-21','Medium'],
+  ['p5','Deliver PDF songbook via download link to all qualifying backers','2025-11-22','Medium'],
+  ['p5','Place CD and vinyl order at Discmakers (CD 3-5 wks, vinyl 8-12 wks)','2025-11-21','High'],
+  ['p5','Place t-shirt order with supplier','2025-11-21','Medium'],
+  ['p5','Set up weekly backer update email cadence','2025-11-22','Medium'],
+  ['p5','Send weekly backer update 1','2025-11-28','Low'],
+  ['p5','Send weekly backer update 2','2025-12-05','Low'],
+  ['p5','Send weekly backer update 3','2025-12-12','Low'],
+  ['p5','Send weekly backer update 4','2025-12-19','Low'],
+  ['p5','Ship CDs when received from Discmakers','2025-12-22','High'],
+  ['p5','Ship vinyl when received from Discmakers','2026-02-01','High'],
+  ['p5','Ship t-shirts when received','2025-12-22','Medium'],
+  ['p5','Notify each backer when their order ships with tracking','2025-12-22','Medium'],
+  ['p5','Run post-mortem in Post-Mortem tab','2026-02-15','Medium'],
+  ['p5','Log campaign history entry','2026-02-15','Low'],
+  ['p5','Brief Brazil quartet album team on lessons learned','2026-02-20','Low'],
+];
+
+const SEED_TIERS = [
+  { name:'Tier 1 · Listener',          price:15,  backers:0, note:'digital download only' },
+  { name:'Tier 2 · Co-Creator',        price:45,  backers:0, note:'digital album + PDF songbook' },
+  { name:'Tier 3 · Collector',         price:85,  backers:0, note:'signed CD + digital + songbook' },
+  { name:'Tier 4 · Vinyl Edition ★',   price:150, backers:0, note:'FLAGSHIP — signed vinyl + digital + songbook' },
+  { name:'Tier 5 · Listening Party',   price:250, backers:0, note:'everything + private Zoom party (cap 20)' },
+  { name:'Tier 6 · Executive Producer',price:500, backers:0, note:'everything + EP credit + 30-min call (cap 10)' },
+  { name:'Add-on · T-shirt',           price:35,  backers:0, note:'available with Tier 3+' },
+  { name:'Dip · Lead Sheet (3 @ $350)',price:350, backers:0, note:'handwritten, released week 2-3' },
+];
+
+const SEED_SUPPLIERS = [
+  { item:'CDs (100 units)', supplier:'Discmakers', link:'https://www.discmakers.com', unit:'', qty:100, lead:'3-5 weeks', backup:'', status:'Not Contacted' },
+  { item:'Vinyl (100 units)', supplier:'Discmakers', link:'https://www.discmakers.com', unit:'', qty:100, lead:'8-12 weeks', backup:'', status:'Not Contacted' },
+  { item:'T-shirts (75 est.)', supplier:'TBD (Printful / local)', link:'', unit:'', qty:75, lead:'', backup:'', status:'Not Contacted' },
+  { item:'Shipping materials (boxes, mailers)', supplier:'TBD', link:'', unit:'', qty:'', lead:'', backup:'', status:'Not Contacted' },
+  { item:'PDF songbook delivery', supplier:'Digital', link:'', unit:0, qty:'', lead:'instant', backup:'', status:'Confirmed' },
+];
+
+const SEED_BUDGET = [
+  { item:'CD manufacturing', est:400, act:'' },
+  { item:'Vinyl manufacturing', est:2000, act:'' },
+  { item:'T-shirts', est:750, act:'' },
+  { item:'Shipping materials', est:400, act:'' },
+  { item:'Meta ads — pre-launch', est:600, act:'' },
+  { item:'Meta ads — live campaign', est:400, act:'' },
+  { item:'Press and PR', est:500, act:'' },
+  { item:'Miscellaneous', est:200, act:'' },
+];
+
+const SEED_EMAILS = [
+  ['Pre-launch welcome',1,'Welcome to the Elevate inner circle','Not Written','2025-09-01'],
+  ['Pre-launch welcome',2,'Why I am making this album','Not Written','2025-09-08'],
+  ['Pre-launch welcome',3,'Your $1 locks in early access','Not Written','2025-09-15'],
+  ['Launch day',1,'(VIP) We are LIVE — your early-bird link','Not Written','2025-10-15'],
+  ['Launch day',2,'Elevate is live on Kickstarter','Not Written','2025-10-15'],
+  ['Mid-campaign update',1,'We hit our goal — here is what is next','Not Written','2025-10-29'],
+  ['Mid-campaign update',2,'New: T-shirt bundle + a handwritten lead sheet','Not Written','2025-10-27'],
+  ['Mid-campaign update',3,'Two weeks of momentum — thank you','Not Written','2025-11-05'],
+  ['Dip response',1,'Just unlocked: limited dip rewards','Not Written','2025-10-27'],
+  ['48-hour final push',1,'48 hours left to back Elevate','Not Written','2025-11-12'],
+  ['48-hour final push',2,'Final hours — last chance for vinyl','Not Written','2025-11-13'],
+  ['Post-campaign thank you',1,'We did it. Thank you.','Not Written','2025-11-15'],
+  ['Backer survey send',1,'One quick step: your survey + shipping info','Not Written','2025-11-18'],
+  ['Fulfillment update',1,'Production update — week 1','Not Written','2025-11-28'],
+  ['Fulfillment update',2,'Production update — week 2','Not Written','2025-12-05'],
+  ['Fulfillment update',3,'Production update — week 3','Not Written','2025-12-12'],
+  ['Fulfillment update',4,'Production update — week 4','Not Written','2025-12-19'],
+  ['Fulfillment update',5,'Production update — week 5','Not Written','2025-12-26'],
+  ['Fulfillment update',6,'Production update — week 6','Not Written','2026-01-02'],
+  ['Fulfillment update',7,'Production update — week 7','Not Written','2026-01-09'],
+  ['Fulfillment update',8,'Production update — week 8','Not Written','2026-01-16'],
+];
+
+const SEED_SOCIAL = [
+  ['2025-09-03','@gabrielsantiago','Reel','Album preview — first 30 seconds','Planned'],
+  ['2025-09-06','@gabrielsantiago','Post','DADGAD tuning breakdown','Planned'],
+  ['2025-09-10','@gabrielsantiago','Reel','Rocky Mountain visuals + new track','Planned'],
+  ['2025-09-13','@gabrielsantiago','Story','Behind the scenes — studio','Planned'],
+  ['2025-09-20','@gabrielsantiago','Reel','Album preview #2','Planned'],
+  ['2025-09-27','@gabrielsantiago','Post','Why I am crowdfunding this','Planned'],
+  ['2025-10-01','@gabrielsantiago','Reel','Street team activation + countdown','Planned'],
+  ['2025-10-08','@gabrielsantiago','Post','Pre-launch announcement','Planned'],
+  ['2025-10-14','@gabrielsantiago','Story','We launch tomorrow','Planned'],
+  ['2025-10-15','@gabrielsantiago','Reel','WE ARE LIVE — launch announcement','Planned'],
+  ['2025-10-18','@gabrielsantiago','Post','We hit the public goal — milestone','Planned'],
+  ['2025-10-27','@gabrielsantiago','Live','Dip-week Instagram Live + dip releases','Planned'],
+  ['2025-11-12','@gabrielsantiago','Reel','48 hours left — final push','Planned'],
+  ['2025-11-14','@gabrielsantiago','Story','Final hours countdown','Planned'],
+  ['2025-11-28','@gabrielsantiago','Post','Fulfillment update — production started','Planned'],
+];
+
+const PM_RATINGS = [
+  ['offer','Offer & tier strength'],
+  ['pricing','Pricing'],
+  ['survey','Survey effectiveness'],
+  ['prelaunch','Pre-launch audience building'],
+  ['vip','$1 VIP conversion'],
+  ['page','Campaign page & video quality'],
+  ['launch','Launch day execution'],
+  ['dip','Dip response'],
+  ['fulfill','Fulfillment communication'],
+  ['overall','Overall'],
+];
+
+/* ---------- SEED ON FIRST RUN ---------- */
+function uid(){ return 'x' + Math.random().toString(36).slice(2,9); }
+function ensureSeed(){
+  if (load('tasks', null) === null)
+    save('tasks', SEED_TASKS.map(([phase,text,due,priority]) => ({ id:uid(), phase, text, due, priority, done:false, notes:'' })));
+  if (load('tiers', null) === null) save('tiers', SEED_TIERS.map(t=>({...t})));
+  if (load('suppliers', null) === null) save('suppliers', SEED_SUPPLIERS.map(s=>({...s})));
+  if (load('budget', null) === null) save('budget', SEED_BUDGET.map(b=>({...b})));
+  if (load('emails', null) === null) save('emails', SEED_EMAILS.map(([seq,num,subj,status,planned])=>({ id:uid(), seq, num, subj, status, planned, actual:'', open:'', notes:'' })));
+  if (load('social', null) === null) save('social', SEED_SOCIAL.map(([date,platform,type,topic,status])=>({ id:uid(), date, platform, type, topic, status, notes:'' })));
+  if (load('settings', null) === null) save('settings', {...DEFAULT_SETTINGS});
+  if (load('prelog', null) === null) save('prelog', []);
+  if (load('livelog', null) === null) save('livelog', []);
+  if (load('postmortem', null) === null) save('postmortem', { ratings:{}, worked:'', change:'', lesson:'' });
+}
+
+/* ---------- DERIVED METRICS ---------- */
+function settings(){ return Object.assign({}, DEFAULT_SETTINGS, load('settings', {})); }
+
+function totals(){
+  const live = load('livelog', []);
+  const revenue = live.reduce((s,r)=>s+(Number(r.revenue)||0),0);
+  const backers = live.reduce((s,r)=>s+(Number(r.backers)||0),0);
+  const aov = backers>0 ? revenue/backers : 0;
+  return { revenue, backers, aov };
+}
+function tierTotals(){
+  const tiers = load('tiers', []);
+  const rev = tiers.reduce((s,t)=>s+(Number(t.price)||0)*(Number(t.backers)||0),0);
+  return { rev, tiers };
+}
+function phaseOf(){
+  const s = settings();
+  const launch = parseD(s.launchDate), end = parseD(s.endDate);
+  const now = parseD(today());
+  if (now < launch) return { label:'Pre-Launch', kind:'pre', days: Math.ceil((launch-now)/864e5) };
+  if (now <= end)   return { label:'Live', kind:'live', days: Math.ceil((end-now)/864e5) };
+  return { label: 'Fulfillment', kind:'post', days: Math.floor((now-end)/864e5) };
+}
+
+/* ---------- COLOR HELPERS ---------- */
+function trafficClass(value, target, higherIsBetter=true){
+  if (!target) return 'text-cream';
+  const ratio = value/target;
+  if (higherIsBetter) return ratio>=1 ? 'text-good' : ratio>=0.7 ? 'text-warn' : 'text-danger';
+  return ratio<=1 ? 'text-good' : 'text-warn';
+}
+
+/* ============================================================
+   NAVIGATION
+   ============================================================ */
+const TABS = [
+  ['dashboard','Dashboard'],
+  ['timeline','Timeline & Tasks'],
+  ['numbers','Numbers'],
+  ['checklists','Checklists'],
+  ['supplier','Supplier & Budget'],
+  ['content','Email & Content'],
+  ['postmortem','Post-Mortem'],
+  ['settings','Settings'],
+];
+let activeTab = load('activeTab','dashboard');
+let charts = {};
+
+function destroyCharts(){ Object.values(charts).forEach(c=>{ try{c.destroy();}catch(e){} }); charts={}; }
+
+function renderNav(){
+  $('navtabs').innerHTML = TABS.map(([id,label])=>
+    `<button data-tab="${id}" class="tabbtn px-3 py-4 whitespace-nowrap ${id===activeTab?'active':'text-cream/70 hover:text-cream'}">${label}</button>`
+  ).join('');
+  $('navtabs').querySelectorAll('button').forEach(b=>b.onclick=()=>go(b.dataset.tab));
+  const badge=$('syncBadge'); if(badge) badge.onclick=()=>{ if(Sync.status==='signedout') Sync.signIn(); else if(Sync.status==='off') go('settings'); };
+  updateSyncBadge();
+}
+function go(tab){ activeTab=tab; save('activeTab',tab); renderNav(); render(); window.scrollTo(0,0); }
+
+function render(){
+  destroyCharts();
+  const v = $('view');
+  ({dashboard:renderDashboard, timeline:renderTimeline, numbers:renderNumbers,
+    checklists:renderChecklists, supplier:renderSupplier, content:renderContent,
+    postmortem:renderPostmortem, settings:renderSettings}[activeTab] || renderDashboard)(v);
+}
+
+/* small reusable progress bar */
+function progressBar(value, target, color='#c8953a'){
+  const p = pct(value, target);
+  return `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,p)}%;background:${color}"></div></div>`;
+}
+function sectionTitle(t, sub=''){ return `<div class="mb-3"><h2 class="text-lg font-bold text-cream">${t}</h2>${sub?`<p class="text-xs text-cream/50">${sub}</p>`:''}</div>`; }
+
+/* ============================================================
+   1. DASHBOARD
+   ============================================================ */
+function renderDashboard(v){
+  const s = settings();
+  const { revenue, backers, aov } = totals();
+  const ph = phaseOf();
+  const { rev:tierRev, tiers } = tierTotals();
+
+  let countdownTxt = ph.kind==='pre' ? `${ph.days} day${ph.days!==1?'s':''} until launch`
+    : ph.kind==='live' ? `${ph.days} day${ph.days!==1?'s':''} remaining`
+    : `${ph.days} day${ph.days!==1?'s':''} since close`;
+  const phColor = ph.kind==='pre' ? '#c8763a' : ph.kind==='live' ? '#6a9e6a' : '#8a8478';
+
+  const aovCls = aov>=s.aovTarget ? 'text-good' : 'text-danger';
+
+  // pre-launch latest
+  const pre = load('prelog', []);
+  const latest = pre.slice().sort((a,b)=> (a.date<b.date?1:-1))[0] || {};
+
+  let html = '';
+
+  // Status banner
+  html += `<div class="card p-5 mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+    style="border-color:${phColor}55">
+    <div>
+      <div class="text-xs uppercase tracking-wider text-cream/50">Campaign Status</div>
+      <div class="text-2xl font-extrabold" style="color:${phColor}">${ph.label}</div>
+      <div class="text-sm text-cream/70">Elevate · Dr. Gabriel Santiago · Kickstarter</div>
+    </div>
+    <div class="text-right">
+      <div class="text-3xl font-extrabold text-amber">${countdownTxt}</div>
+      <div class="text-xs text-cream/50">Launch ${s.launchDate} → Close ${s.endDate}</div>
+    </div>
+  </div>`;
+
+  // Revenue + backers + AOV cards
+  html += `<div class="grid md:grid-cols-2 gap-4 mb-4">`;
+  html += `<div class="card p-5">
+    <div class="flex justify-between text-sm mb-1"><span class="text-cream/70">Public goal</span><span class="font-semibold">${money(revenue)} / ${money(s.publicGoal)}</span></div>
+    ${progressBar(revenue, s.publicGoal, '#c8953a')}
+    <div class="text-right text-xs text-cream/50 mt-1">${pct(revenue,s.publicGoal).toFixed(0)}%</div>
+    <div class="flex justify-between text-sm mb-1 mt-3"><span class="text-cream/70">Real target</span><span class="font-semibold">${money(revenue)} / ${money(s.realTarget)}</span></div>
+    ${progressBar(revenue, s.realTarget, '#c8953a')}
+    <div class="text-right text-xs text-cream/50 mt-1">${pct(revenue,s.realTarget).toFixed(0)}%</div>
+  </div>`;
+  html += `<div class="card p-5 flex flex-col justify-center gap-4">
+    <div>
+      <div class="flex justify-between text-sm mb-1"><span class="text-cream/70">Backers</span><span class="font-semibold">${backers} / ${s.backerTarget}</span></div>
+      ${progressBar(backers, s.backerTarget, '#6a9e6a')}
+    </div>
+    <div class="flex items-end justify-between">
+      <div>
+        <div class="text-xs text-cream/50">Average Order Value</div>
+        <div class="text-3xl font-extrabold ${aovCls}">${money2(aov)}</div>
+      </div>
+      <div class="text-right text-sm text-cream/60">target ${money(s.aovTarget)}<br>
+        <span class="chip ${aov>=s.aovTarget?'bg-good/20 text-good':'bg-danger/20 text-danger'}">${aov>=s.aovTarget?'On / above target':'Below target'}</span>
+      </div>
+    </div>
+  </div>`;
+  html += `</div>`;
+
+  // Pre-launch tracker (only before launch)
+  if (ph.kind==='pre'){
+    const vip = Number(latest.vip)||0, opt = Number(latest.optins)||0, kf = Number(latest.followers)||0;
+    html += `<div class="card p-5 mb-4">
+      ${sectionTitle('Pre-Launch Tracker', latest.date?('latest log: '+latest.date):'no entries yet — log them in the Numbers tab')}
+      <div class="grid sm:grid-cols-3 gap-5">
+        <div>
+          <div class="flex justify-between text-sm mb-1"><span class="text-cream/70">$1 VIP deposits</span><span class="font-semibold">${vip}</span></div>
+          ${progressBar(vip, s.vipTarget, '#c8953a')}
+          <div class="text-xs text-cream/50 mt-1">min ${s.vipMin} · target ${s.vipTarget}</div>
+        </div>
+        <div>
+          <div class="flex justify-between text-sm mb-1"><span class="text-cream/70">New email opt-ins</span><span class="font-semibold">${opt}</span></div>
+          ${progressBar(opt, s.optinsTarget, '#c8953a')}
+          <div class="text-xs text-cream/50 mt-1">target ${s.optinsMin}–${s.optinsTarget}</div>
+        </div>
+        <div>
+          <div class="flex justify-between text-sm mb-1"><span class="text-cream/70">KS pre-launch followers</span><span class="font-semibold">${kf}</span></div>
+          ${progressBar(kf, s.kfollowMin, '#c8953a')}
+          <div class="text-xs text-cream/50 mt-1">min ${s.kfollowMin}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Tier breakdown table
+  html += `<div class="card p-5 mb-4">
+    ${sectionTitle('Tier Breakdown', 'enter backers per tier in the Numbers tab')}
+    <div class="overflow-x-auto"><table>
+      <thead><tr><th>Tier</th><th>Price</th><th>Backers</th><th>Revenue</th><th>% of total</th></tr></thead>
+      <tbody>
+      ${tiers.map(t=>{
+        const r=(Number(t.price)||0)*(Number(t.backers)||0);
+        return `<tr><td>${esc(t.name)}</td><td>${money(t.price)}</td><td>${t.backers||0}</td><td>${money(r)}</td><td>${tierRev>0?(r/tierRev*100).toFixed(1):'0.0'}%</td></tr>`;
+      }).join('')}
+      </tbody>
+      <tfoot><tr class="font-bold"><td>Total</td><td></td><td>${tiers.reduce((a,t)=>a+(Number(t.backers)||0),0)}</td><td>${money(tierRev)}</td><td>100%</td></tr></tfoot>
+    </table></div>
+  </div>`;
+
+  // Quick entry
+  html += `<div class="card p-5">
+    ${sectionTitle('Quick Daily Entry', 'one-click save to the live campaign log')}
+    <div class="grid sm:grid-cols-4 gap-3 items-end">
+      <div><label class="text-xs text-cream/60 block mb-1">Date</label><input id="qe-date" type="date" value="${today()}" class="w-full"></div>
+      <div><label class="text-xs text-cream/60 block mb-1">Daily revenue ($)</label><input id="qe-rev" type="number" min="0" placeholder="0" class="w-full"></div>
+      <div><label class="text-xs text-cream/60 block mb-1">Daily new backers</label><input id="qe-bk" type="number" min="0" placeholder="0" class="w-full"></div>
+      <button id="qe-save" class="bg-amber text-ink font-semibold rounded-lg px-4 py-2 hover:opacity-90">Save to log</button>
+    </div>
+    <div class="mt-4 pt-4 border-t border-edge flex flex-wrap items-center gap-3">
+      <button id="qe-ks" class="bg-panel2 border border-edge rounded-lg px-4 py-2 text-sm hover:border-amber">⤓ Pull live numbers from Kickstarter</button>
+      <span class="text-xs text-cream/50">${settings().ksWorkerUrl && settings().ksProjectUrl ? 'Updates today’s entry to match your project totals.' : 'Set up the Kickstarter link in Settings first.'}</span>
+    </div>
+  </div>`;
+
+  v.innerHTML = html;
+  $('qe-ks').onclick = (e)=>doKickstarterPull(e.currentTarget);
+  $('qe-save').onclick = ()=>{
+    const date=$('qe-date').value, rev=Number($('qe-rev').value)||0, bk=Number($('qe-bk').value)||0;
+    if(!date) return alert('Pick a date.');
+    const log = load('livelog', []);
+    log.push({ date, revenue:rev, backers:bk, notes:'' });
+    save('livelog', log);
+    render();
+  };
+}
+
+/* ============================================================
+   2. TIMELINE & TASKS
+   ============================================================ */
+let taskFilter = { phase:'all', priority:'all', status:'all' };
+
+function renderTimeline(v){
+  const tasks = load('tasks', []);
+  let html = '';
+
+  // Gantt
+  html += `<div class="card p-5 mb-5">
+    ${sectionTitle('Timeline — Phase Gantt', 'June 2025 → post-fulfillment')}
+    <div style="height:230px"><canvas id="ganttChart"></canvas></div>
+  </div>`;
+
+  // Per-phase progress
+  html += `<div class="card p-5 mb-5">
+    ${sectionTitle('Phase Progress')}
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    ${PHASES.map(p=>{
+      const t = tasks.filter(x=>x.phase===p.key);
+      const done = t.filter(x=>x.done).length;
+      const pc = t.length? (done/t.length*100):0;
+      return `<div><div class="flex justify-between text-sm mb-1"><span class="text-cream/80">${esc(p.label)}</span><span class="text-cream/50">${done}/${t.length}</span></div>${progressBar(done,t.length||1,p.color)}</div>`;
+    }).join('')}
+    </div>
+  </div>`;
+
+  // Filters + add
+  html += `<div class="card p-5">
+    ${sectionTitle('Master Task List')}
+    <div class="flex flex-wrap gap-3 mb-4 items-end">
+      <div><label class="text-xs text-cream/60 block mb-1">Phase</label>
+        <select id="f-phase"><option value="all">All phases</option>${PHASES.map(p=>`<option value="${p.key}" ${taskFilter.phase===p.key?'selected':''}>${esc(p.label)}</option>`).join('')}</select></div>
+      <div><label class="text-xs text-cream/60 block mb-1">Priority</label>
+        <select id="f-prio"><option value="all">All</option>${['High','Medium','Low'].map(p=>`<option ${taskFilter.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
+      <div><label class="text-xs text-cream/60 block mb-1">Status</label>
+        <select id="f-status"><option value="all" ${taskFilter.status==='all'?'selected':''}>All</option><option value="open" ${taskFilter.status==='open'?'selected':''}>Open</option><option value="done" ${taskFilter.status==='done'?'selected':''}>Done</option></select></div>
+      <button id="addTask" class="bg-amber text-ink font-semibold rounded-lg px-4 py-2 hover:opacity-90 ml-auto">+ Add task</button>
+    </div>
+    <div id="taskList"></div>
+  </div>`;
+
+  v.innerHTML = html;
+
+  $('f-phase').onchange = e=>{taskFilter.phase=e.target.value; renderTaskList();};
+  $('f-prio').onchange  = e=>{taskFilter.priority=e.target.value; renderTaskList();};
+  $('f-status').onchange= e=>{taskFilter.status=e.target.value; renderTaskList();};
+  $('addTask').onclick = ()=>{
+    const tasks = load('tasks', []);
+    tasks.unshift({ id:uid(), phase:PHASES[0].key, text:'New task', due:today(), priority:'Medium', done:false, notes:'' });
+    save('tasks', tasks); renderTaskList();
+  };
+
+  renderTaskList();
+  drawGantt();
+}
+
+function prioChip(p){
+  const m={High:'bg-danger/20 text-danger',Medium:'bg-warn/20 text-warn',Low:'bg-cream/10 text-cream/60'};
+  return `<span class="chip ${m[p]||m.Medium}">${p}</span>`;
+}
+
+function renderTaskList(){
+  const all = load('tasks', []);
+  let list = all.filter(t=>{
+    if(taskFilter.phase!=='all' && t.phase!==taskFilter.phase) return false;
+    if(taskFilter.priority!=='all' && t.priority!==taskFilter.priority) return false;
+    if(taskFilter.status==='open' && t.done) return false;
+    if(taskFilter.status==='done' && !t.done) return false;
+    return true;
+  });
+  list.sort((a,b)=> (a.due||'')< (b.due||'')?-1:1);
+  const el = $('taskList');
+  if(!list.length){ el.innerHTML = `<div class="empty">No tasks match these filters.</div>`; return; }
+  el.innerHTML = `<div class="overflow-x-auto"><table>
+    <thead><tr><th></th><th>Task</th><th>Phase</th><th>Due</th><th>Priority</th><th>Notes</th><th></th></tr></thead>
+    <tbody>${list.map(t=>`
+      <tr class="${t.done?'opacity-50':''}">
+        <td><input type="checkbox" data-id="${t.id}" class="tk-done" ${t.done?'checked':''}></td>
+        <td><input class="tk-text w-full min-w-[220px]" data-id="${t.id}" value="${esc(t.text)}"></td>
+        <td><select class="tk-phase" data-id="${t.id}">${PHASES.map(p=>`<option value="${p.key}" ${t.phase===p.key?'selected':''}>${esc(p.label)}</option>`).join('')}</select></td>
+        <td><input type="date" class="tk-due" data-id="${t.id}" value="${esc(t.due||'')}"></td>
+        <td><select class="tk-prio" data-id="${t.id}">${['High','Medium','Low'].map(p=>`<option ${t.priority===p?'selected':''}>${p}</option>`).join('')}</select></td>
+        <td><input class="tk-notes w-full min-w-[140px]" data-id="${t.id}" value="${esc(t.notes||'')}" placeholder="—"></td>
+        <td><button class="tk-del text-danger" data-id="${t.id}" title="Delete">✕</button></td>
+      </tr>`).join('')}</tbody></table></div>`;
+
+  const upd=(id,fn)=>{ const tasks=load('tasks',[]); const t=tasks.find(x=>x.id===id); if(t){fn(t); save('tasks',tasks);} };
+  el.querySelectorAll('.tk-done').forEach(c=>c.onchange=e=>{upd(e.target.dataset.id,t=>t.done=e.target.checked); renderTaskList();});
+  el.querySelectorAll('.tk-text').forEach(c=>c.onchange=e=>upd(e.target.dataset.id,t=>t.text=e.target.value));
+  el.querySelectorAll('.tk-phase').forEach(c=>c.onchange=e=>{upd(e.target.dataset.id,t=>t.phase=e.target.value); drawGantt();});
+  el.querySelectorAll('.tk-due').forEach(c=>c.onchange=e=>upd(e.target.dataset.id,t=>t.due=e.target.value));
+  el.querySelectorAll('.tk-prio').forEach(c=>c.onchange=e=>upd(e.target.dataset.id,t=>t.priority=e.target.value));
+  el.querySelectorAll('.tk-notes').forEach(c=>c.onchange=e=>upd(e.target.dataset.id,t=>t.notes=e.target.value));
+  el.querySelectorAll('.tk-del').forEach(c=>c.onclick=e=>{
+    if(!confirm('Delete this task?'))return;
+    let tasks=load('tasks',[]).filter(x=>x.id!==e.target.dataset.id); save('tasks',tasks); renderTaskList();
+  });
+}
+
+function drawGantt(){
+  const ctx=$('ganttChart'); if(!ctx) return;
+  const tasks=load('tasks',[]);
+  // Self-contained linear time axis: x = days since base (no date-adapter CDN needed).
+  const base = parseD('2025-06-01').getTime();
+  const off = (d)=> (parseD(d).getTime()-base)/864e5;
+  const maxOff = off('2026-03-01');
+  const months=[]; let m=new Date(2025,5,1);
+  while(m<=new Date(2026,2,1)){ months.push({ v:(m.getTime()-base)/864e5, l:m.toLocaleDateString('en',{month:'short',year:'2-digit'}) }); m=new Date(m.getFullYear(), m.getMonth()+1, 1); }
+
+  const labels = PHASES.map(p=>p.label);
+  const data = PHASES.map(p=>[ off(p.start), off(p.end) ]);
+  const colors = PHASES.map(p=>p.color);
+  if(charts.gantt) charts.gantt.destroy();
+  charts.gantt = new Chart(ctx,{
+    type:'bar',
+    data:{ labels, datasets:[{ data, backgroundColor:colors, borderRadius:6, barThickness:18 }]},
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:(c)=>{
+        const [a,b]=c.raw; const d=v=>new Date(base+v*864e5).toISOString().slice(0,10);
+        const p=PHASES[c.dataIndex]; const t=tasks.filter(x=>x.phase===p.key); const done=t.filter(x=>x.done).length;
+        return `${d(a)} → ${d(b)}  (${done}/${t.length} tasks done)`;
+      }}}},
+      scales:{
+        x:{ type:'linear', min:0, max:maxOff,
+            afterBuildTicks:(axis)=>{ axis.ticks = months.map(mo=>({value:mo.v})); },
+            ticks:{ color:'#bdb6a8', autoSkip:false, callback:(v)=>{ const f=months.find(mo=>Math.abs(mo.v-v)<0.5); return f?f.l:''; } },
+            grid:{color:'#333'} },
+        y:{ grid:{color:'#2a2a2a'}, ticks:{color:'#f0ece4'} }
+      }
+    }
+  });
+}
+
+/* ============================================================
+   3. NUMBERS TRACKER
+   ============================================================ */
+function renderNumbers(v){
+  const s=settings();
+  const pre=load('prelog',[]); const live=load('livelog',[]);
+  const {rev:tierRev,tiers}=tierTotals();
+  const {revenue,backers,aov}=totals();
+  let html='';
+
+  html += `<div class="flex justify-end mb-4"><button id="csvBtn" class="bg-panel2 border border-edge rounded-lg px-4 py-2 text-sm hover:border-amber">⬇ Export all data as CSV</button></div>`;
+
+  // Charts
+  html += `<div class="grid lg:grid-cols-2 gap-4 mb-5">
+    <div class="card p-5"><h3 class="font-bold mb-2">Cumulative Revenue</h3><div style="height:240px"><canvas id="revChart"></canvas></div></div>
+    <div class="card p-5"><h3 class="font-bold mb-2">Cumulative Backers</h3><div style="height:240px"><canvas id="bkChart"></canvas></div></div>
+  </div>`;
+
+  // Pre-launch log
+  html += `<div class="card p-5 mb-5">
+    ${sectionTitle('Pre-Launch Daily Log')}
+    <div class="grid sm:grid-cols-5 gap-2 items-end mb-3">
+      <div><label class="text-xs text-cream/60 block mb-1">Date</label><input id="pl-date" type="date" value="${today()}" class="w-full"></div>
+      <div><label class="text-xs text-cream/60 block mb-1">$1 VIP</label><input id="pl-vip" type="number" class="w-full"></div>
+      <div><label class="text-xs text-cream/60 block mb-1">New opt-ins</label><input id="pl-opt" type="number" class="w-full"></div>
+      <div><label class="text-xs text-cream/60 block mb-1">KS followers</label><input id="pl-foll" type="number" class="w-full"></div>
+      <button id="pl-add" class="bg-amber text-ink font-semibold rounded-lg px-4 py-2">+ Add</button>
+    </div>
+    <input id="pl-notes" class="w-full mb-3" placeholder="Notes (optional)">
+    <div id="plTable"></div>
+  </div>`;
+
+  // Live log
+  html += `<div class="card p-5 mb-5">
+    ${sectionTitle('Live Campaign Daily Log')}
+    <div class="grid sm:grid-cols-4 gap-2 items-end mb-3">
+      <div><label class="text-xs text-cream/60 block mb-1">Date</label><input id="lv-date" type="date" value="${today()}" class="w-full"></div>
+      <div><label class="text-xs text-cream/60 block mb-1">Daily revenue ($)</label><input id="lv-rev" type="number" class="w-full"></div>
+      <div><label class="text-xs text-cream/60 block mb-1">Daily backers</label><input id="lv-bk" type="number" class="w-full"></div>
+      <button id="lv-add" class="bg-amber text-ink font-semibold rounded-lg px-4 py-2">+ Add</button>
+    </div>
+    <input id="lv-notes" class="w-full mb-3" placeholder="Notes (optional)">
+    <div id="lvTable"></div>
+  </div>`;
+
+  // Tier performance
+  html += `<div class="card p-5">
+    ${sectionTitle('Tier Performance', 'enter backers per tier — revenue & % auto-calculated')}
+    <div class="overflow-x-auto"><table>
+      <thead><tr><th>Tier</th><th>Price</th><th>Backers</th><th>Revenue</th><th>% of total</th></tr></thead>
+      <tbody>${tiers.map((t,i)=>{
+        const r=(Number(t.price)||0)*(Number(t.backers)||0);
+        return `<tr><td>${esc(t.name)}<div class="text-xs text-cream/40">${esc(t.note||'')}</div></td><td>${money(t.price)}</td>
+          <td><input type="number" min="0" class="tier-bk w-20" data-i="${i}" value="${t.backers||0}"></td>
+          <td>${money(r)}</td><td>${tierRev>0?(r/tierRev*100).toFixed(1):'0.0'}%</td></tr>`;
+      }).join('')}</tbody>
+      <tfoot><tr class="font-bold"><td>Total</td><td></td><td>${tiers.reduce((a,t)=>a+(Number(t.backers)||0),0)}</td><td>${money(tierRev)}</td><td>100%</td></tr></tfoot>
+    </table></div>
+    <div class="mt-4 flex flex-wrap gap-6 text-sm">
+      <div>Live-log revenue: <span class="font-bold text-amber">${money(revenue)}</span></div>
+      <div>Live-log backers: <span class="font-bold text-amber">${backers}</span></div>
+      <div>AOV (revenue ÷ backers): <span class="font-bold ${aov>=s.aovTarget?'text-good':'text-danger'}">${money2(aov)}</span> <span class="text-cream/50">/ target ${money(s.aovTarget)}</span></div>
+    </div>
+  </div>`;
+
+  v.innerHTML=html;
+
+  // pre-launch handlers
+  $('pl-add').onclick=()=>{
+    const d=$('pl-date').value; if(!d)return alert('Pick a date.');
+    const log=load('prelog',[]);
+    log.push({date:d, vip:Number($('pl-vip').value)||0, optins:Number($('pl-opt').value)||0, followers:Number($('pl-foll').value)||0, notes:$('pl-notes').value||''});
+    save('prelog',log); renderNumbers(v);
+  };
+  $('lv-add').onclick=()=>{
+    const d=$('lv-date').value; if(!d)return alert('Pick a date.');
+    const log=load('livelog',[]);
+    log.push({date:d, revenue:Number($('lv-rev').value)||0, backers:Number($('lv-bk').value)||0, notes:$('lv-notes').value||''});
+    save('livelog',log); renderNumbers(v);
+  };
+  v.querySelectorAll('.tier-bk').forEach(inp=>inp.onchange=e=>{
+    const tiers=load('tiers',[]); tiers[+e.target.dataset.i].backers=Number(e.target.value)||0; save('tiers',tiers); renderNumbers(v);
+  });
+  $('csvBtn').onclick=exportCSV;
+
+  renderLogTable('plTable','prelog',['date','vip','optins','followers','notes'],['Date','$1 VIP','New opt-ins','KS followers','Notes']);
+  renderLogTable('lvTable','livelog',['date','revenue','backers','notes'],['Date','Daily rev','Daily backers','Notes'],true);
+
+  drawNumberCharts();
+}
+
+function renderLogTable(elId, key, fields, heads, cumulative){
+  const el=$(elId); let rows=load(key,[]);
+  if(!rows.length){ el.innerHTML=`<div class="empty">No entries yet.</div>`; return; }
+  const sorted=rows.map((r,i)=>({r,i})).sort((a,b)=> (a.r.date<b.r.date?-1:1));
+  let cumRev=0,cumBk=0;
+  let extraHead = cumulative? '<th>Cum. rev</th><th>Cum. backers</th>':'';
+  el.innerHTML=`<div class="overflow-x-auto"><table><thead><tr>${heads.map(h=>`<th>${h}</th>`).join('')}${extraHead}<th></th></tr></thead><tbody>
+  ${sorted.map(({r,i})=>{
+    let extra='';
+    if(cumulative){ cumRev+=Number(r.revenue)||0; cumBk+=Number(r.backers)||0; extra=`<td>${money(cumRev)}</td><td>${cumBk}</td>`; }
+    return `<tr>${fields.map(f=>`<td>${f==='notes'?esc(r[f]||'—'):(f==='revenue'?money(r[f]):esc(r[f]??''))}</td>`).join('')}${extra}<td><button class="log-del text-danger" data-key="${key}" data-i="${i}">✕</button></td></tr>`;
+  }).join('')}</tbody></table></div>`;
+  el.querySelectorAll('.log-del').forEach(b=>b.onclick=e=>{
+    let arr=load(e.target.dataset.key,[]); arr.splice(+e.target.dataset.i,1); save(e.target.dataset.key,arr);
+    const v=$('view'); renderNumbers(v);
+  });
+}
+
+function drawNumberCharts(){
+  const s=settings();
+  const live=load('livelog',[]).slice().sort((a,b)=>(a.date<b.date?-1:1));
+  let labels=[], cumRev=[], cumBk=[]; let r=0,b=0;
+  live.forEach(e=>{ r+=Number(e.revenue)||0; b+=Number(e.backers)||0; labels.push(e.date); cumRev.push(r); cumBk.push(b); });
+
+  const refLine=(val,color,text)=>({ type:'line', yMin:val,yMax:val });
+  const common = (refs)=>({
+    responsive:true, maintainAspectRatio:false,
+    plugins:{ legend:{labels:{color:'#bdb6a8'}}, annotation:undefined },
+    scales:{ x:{grid:{color:'#2a2a2a'},ticks:{color:'#bdb6a8'}}, y:{grid:{color:'#333'},ticks:{color:'#bdb6a8'}, beginAtZero:true} }
+  });
+
+  // revenue chart with reference lines drawn as extra datasets
+  const revCtx=$('revChart');
+  if(revCtx){
+    const n = labels.length || 1;
+    charts.rev=new Chart(revCtx,{ type:'line',
+      data:{ labels: labels.length?labels:['—'], datasets:[
+        { label:'Cumulative revenue', data: cumRev.length?cumRev:[0], borderColor:'#c8953a', backgroundColor:'rgba(200,149,58,.15)', fill:true, tension:.25, pointRadius:3 },
+        { label:'Public goal $2,500', data: Array(Math.max(1,n)).fill(s.publicGoal), borderColor:'#6a9e6a', borderDash:[6,4], pointRadius:0, fill:false },
+        { label:'Real target $10,000', data: Array(Math.max(1,n)).fill(s.realTarget), borderColor:'#c85a3a', borderDash:[6,4], pointRadius:0, fill:false },
+      ]},
+      options: common()
+    });
+  }
+  const bkCtx=$('bkChart');
+  if(bkCtx){
+    const n=labels.length||1;
+    charts.bk=new Chart(bkCtx,{ type:'line',
+      data:{ labels: labels.length?labels:['—'], datasets:[
+        { label:'Cumulative backers', data: cumBk.length?cumBk:[0], borderColor:'#6a9e6a', backgroundColor:'rgba(106,158,106,.15)', fill:true, tension:.25, pointRadius:3 },
+        { label:'Target 75 backers', data: Array(Math.max(1,n)).fill(s.backerTarget), borderColor:'#c8953a', borderDash:[6,4], pointRadius:0, fill:false },
+      ]},
+      options: common()
+    });
+  }
+}
+
+function exportCSV(){
+  const out=[];
+  const push=(title,heads,rows)=>{ out.push(title); out.push(heads.join(',')); rows.forEach(r=>out.push(r.map(csvCell).join(','))); out.push(''); };
+  const csvCell=(x)=>{ const s=String(x??''); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  const settingsObj=settings();
+  push('SETTINGS',['key','value'],Object.entries(settingsObj));
+  push('TIERS',['name','price','backers','revenue'], load('tiers',[]).map(t=>[t.name,t.price,t.backers,(t.price*t.backers)]));
+  push('PRE-LAUNCH LOG',['date','vip','optins','followers','notes'], load('prelog',[]).map(r=>[r.date,r.vip,r.optins,r.followers,r.notes]));
+  push('LIVE LOG',['date','revenue','backers','notes'], load('livelog',[]).map(r=>[r.date,r.revenue,r.backers,r.notes]));
+  push('TASKS',['phase','task','due','priority','done','notes'], load('tasks',[]).map(t=>[phaseLabel(t.phase),t.text,t.due,t.priority,t.done,t.notes]));
+  push('SUPPLIERS',['item','supplier','unit','qty','lead','backup','status'], load('suppliers',[]).map(x=>[x.item,x.supplier,x.unit,x.qty,x.lead,x.backup,x.status]));
+  push('BUDGET',['item','estimated','actual'], load('budget',[]).map(b=>[b.item,b.est,b.act]));
+  push('EMAILS',['sequence','#','subject','status','planned','actual','open%','notes'], load('emails',[]).map(e=>[e.seq,e.num,e.subj,e.status,e.planned,e.actual,e.open,e.notes]));
+  push('SOCIAL',['date','platform','type','topic','status','notes'], load('social',[]).map(s=>[s.date,s.platform,s.type,s.topic,s.status,s.notes]));
+  downloadFile('elevate_data_'+today()+'.csv', out.join('\n'), 'text/csv');
+}
+function downloadFile(name, content, type){
+  const blob=new Blob([content],{type}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url);
+}
+
+/* ============================================================
+   4. PHASE CHECKLISTS  (accordions, same store as tasks)
+   ============================================================ */
+function renderChecklists(v){
+  const tasks=load('tasks',[]);
+  let html = sectionTitle('Phase Checklists','every item persists — checking here also updates the Timeline task list');
+  html += PHASES.map((p,idx)=>{
+    const items=tasks.filter(t=>t.phase===p.key);
+    const done=items.filter(t=>t.done).length;
+    const pc = items.length? Math.round(done/items.length*100):0;
+    return `<details class="card mb-3" ${idx===0?'open':''}>
+      <summary class="p-4 flex items-center justify-between gap-3">
+        <span class="font-bold" style="color:${p.color}">${esc(p.label)}</span>
+        <span class="flex items-center gap-3 flex-1 justify-end">
+          <span class="text-xs text-cream/50">${done}/${items.length} · ${pc}%</span>
+          <span class="w-32">${progressBar(done,items.length||1,p.color)}</span>
+        </span>
+      </summary>
+      <div class="px-4 pb-4 space-y-1">
+        ${items.length? items.map(t=>`
+          <label class="flex items-start gap-3 py-1.5 border-t border-edge/60 cursor-pointer ${t.done?'opacity-50':''}">
+            <input type="checkbox" class="cl-chk mt-0.5" data-id="${t.id}" ${t.done?'checked':''}>
+            <span class="text-sm flex-1">${esc(t.text)}</span>
+            ${t.due?`<span class="text-xs text-cream/40 whitespace-nowrap">${t.due}</span>`:''}
+            ${prioChip(t.priority)}
+          </label>`).join('') : '<div class="empty">No items in this phase.</div>'}
+      </div>
+    </details>`;
+  }).join('');
+  v.innerHTML=html;
+  v.querySelectorAll('.cl-chk').forEach(c=>c.onchange=e=>{
+    const tasks=load('tasks',[]); const t=tasks.find(x=>x.id===e.target.dataset.id); if(t){t.done=e.target.checked; save('tasks',tasks);} renderChecklists(v);
+  });
+}
+
+/* ============================================================
+   5. SUPPLIER & BUDGET
+   ============================================================ */
+function renderSupplier(v){
+  const sup=load('suppliers',[]);
+  const budget=load('budget',[]);
+  const {revenue}=totals();
+  const STATUS=['Not Contacted','Quoted','Confirmed','Ordered','Received'];
+
+  let html = sectionTitle('Suppliers');
+  html += `<div class="card p-5 mb-5"><div class="overflow-x-auto"><table>
+    <thead><tr><th>Item</th><th>Supplier</th><th>Link</th><th>Unit cost</th><th>Qty</th><th>Total</th><th>Lead time</th><th>Backup</th><th>Status</th><th></th></tr></thead>
+    <tbody>${sup.map((r,i)=>{
+      const total=(Number(r.unit)||0)*(Number(r.qty)||0);
+      return `<tr>
+        <td><input class="sup w-full min-w-[140px]" data-i="${i}" data-f="item" value="${esc(r.item)}"></td>
+        <td><input class="sup w-full min-w-[110px]" data-i="${i}" data-f="supplier" value="${esc(r.supplier)}"></td>
+        <td>${r.link?`<a href="${esc(r.link)}" target="_blank" rel="noopener" class="text-amber underline text-xs">link</a>`:''}<input class="sup w-full min-w-[120px] mt-1" data-i="${i}" data-f="link" value="${esc(r.link)}" placeholder="https://"></td>
+        <td><input type="number" class="sup w-20" data-i="${i}" data-f="unit" value="${esc(r.unit)}" placeholder="TBD"></td>
+        <td><input class="sup w-16" data-i="${i}" data-f="qty" value="${esc(r.qty)}"></td>
+        <td class="whitespace-nowrap">${(Number(r.unit)||0)&&(Number(r.qty)||0)?money(total):'<span class="text-cream/40">TBD</span>'}</td>
+        <td><input class="sup w-24" data-i="${i}" data-f="lead" value="${esc(r.lead)}"></td>
+        <td><input class="sup w-28" data-i="${i}" data-f="backup" value="${esc(r.backup)}"></td>
+        <td><select class="sup" data-i="${i}" data-f="status">${STATUS.map(s=>`<option ${r.status===s?'selected':''}>${s}</option>`).join('')}</select></td>
+        <td><button class="sup-del text-danger" data-i="${i}">✕</button></td>
+      </tr>`;
+    }).join('')}</tbody></table></div>
+    <button id="sup-add" class="mt-3 bg-panel2 border border-edge rounded-lg px-3 py-1.5 text-sm hover:border-amber">+ Add supplier row</button>
+  </div>`;
+
+  // Budget
+  const estCosts=budget.reduce((a,b)=>a+(Number(b.est)||0),0);
+  const actCosts=budget.reduce((a,b)=>a+(Number(b.act)||0),0);
+  const ksEst=10000*0.05, ppEst=10000*0.03;
+  const ksAct=revenue*0.05, ppAct=revenue*0.03;
+  const estTotal=estCosts+ksEst+ppEst;
+  const actTotal=actCosts+ksAct+ppAct;
+  const estProfit=10000-estTotal;
+  const actProfit=revenue-actTotal;
+
+  html += sectionTitle('Budget','estimated vs actual — Kickstarter 5% & processing 3% auto-calculated');
+  html += `<div class="card p-5"><div class="overflow-x-auto"><table>
+    <thead><tr><th>Line item</th><th>Estimated</th><th>Actual</th></tr></thead>
+    <tbody>
+      <tr class="text-good"><td class="font-semibold">Revenue</td><td>${money(10000)}</td><td>${money(revenue)}</td></tr>
+      ${budget.map((b,i)=>`<tr>
+        <td>${esc(b.item)}</td>
+        <td><input type="number" class="bud w-24" data-i="${i}" data-f="est" value="${esc(b.est)}"></td>
+        <td><input type="number" class="bud w-24" data-i="${i}" data-f="act" value="${esc(b.act)}" placeholder="—"></td>
+      </tr>`).join('')}
+      <tr><td>Kickstarter fee (5%)</td><td>${money(ksEst)}</td><td>${money(ksAct)}</td></tr>
+      <tr><td>Payment processing (3%)</td><td>${money(ppEst)}</td><td>${money(ppAct)}</td></tr>
+      <tr class="font-bold border-t-2 border-edge"><td>Total costs</td><td>${money(estTotal)}</td><td>${money(actTotal)}</td></tr>
+      <tr class="font-extrabold"><td>Profit</td>
+        <td class="${estProfit>=0?'text-good':'text-danger'}">${money(estProfit)}</td>
+        <td class="${actProfit>=0?'text-good':'text-danger'}">${revenue>0?money(actProfit):'<span class="text-cream/40">—</span>'}</td></tr>
+    </tbody></table></div></div>`;
+
+  v.innerHTML=html;
+
+  v.querySelectorAll('.sup').forEach(inp=>inp.onchange=e=>{
+    const arr=load('suppliers',[]); arr[+e.target.dataset.i][e.target.dataset.f]=e.target.value; save('suppliers',arr); renderSupplier(v);
+  });
+  v.querySelectorAll('.sup-del').forEach(b=>b.onclick=e=>{ const arr=load('suppliers',[]); arr.splice(+e.target.dataset.i,1); save('suppliers',arr); renderSupplier(v); });
+  $('sup-add').onclick=()=>{ const arr=load('suppliers',[]); arr.push({item:'New item',supplier:'',link:'',unit:'',qty:'',lead:'',backup:'',status:'Not Contacted'}); save('suppliers',arr); renderSupplier(v); };
+  v.querySelectorAll('.bud').forEach(inp=>inp.onchange=e=>{
+    const arr=load('budget',[]); arr[+e.target.dataset.i][e.target.dataset.f]=e.target.value; save('budget',arr); renderSupplier(v);
+  });
+}
+
+/* ============================================================
+   6. EMAIL & CONTENT
+   ============================================================ */
+function renderContent(v){
+  const emails=load('emails',[]);
+  const social=load('social',[]);
+  const ES=['Not Written','Drafted','Approved','Scheduled','Sent'];
+  const SS=['Planned','In Progress','Posted'];
+
+  let html=sectionTitle('Email Sequence Tracker');
+  html+=`<div class="card p-5 mb-5"><div class="overflow-x-auto"><table>
+    <thead><tr><th>Sequence</th><th>#</th><th>Subject line</th><th>Status</th><th>Planned</th><th>Actual</th><th>Open %</th><th>Notes</th><th></th></tr></thead>
+    <tbody>${emails.map(e=>`<tr>
+      <td class="whitespace-nowrap">${esc(e.seq)}</td><td>${e.num}</td>
+      <td><input class="em w-full min-w-[220px]" data-id="${e.id}" data-f="subj" value="${esc(e.subj)}"></td>
+      <td><select class="em" data-id="${e.id}" data-f="status">${ES.map(s=>`<option ${e.status===s?'selected':''}>${s}</option>`).join('')}</select></td>
+      <td><input type="date" class="em" data-id="${e.id}" data-f="planned" value="${esc(e.planned||'')}"></td>
+      <td><input type="date" class="em" data-id="${e.id}" data-f="actual" value="${esc(e.actual||'')}"></td>
+      <td><input type="number" class="em w-16" data-id="${e.id}" data-f="open" value="${esc(e.open)}" placeholder="—"></td>
+      <td><input class="em w-full min-w-[120px]" data-id="${e.id}" data-f="notes" value="${esc(e.notes)}"></td>
+      <td><button class="em-del text-danger" data-id="${e.id}">✕</button></td>
+    </tr>`).join('')}</tbody></table></div>
+    <button id="em-add" class="mt-3 bg-panel2 border border-edge rounded-lg px-3 py-1.5 text-sm hover:border-amber">+ Add email row</button>
+  </div>`;
+
+  html+=sectionTitle('Social Content Calendar');
+  html+=`<div class="card p-5"><div class="overflow-x-auto"><table>
+    <thead><tr><th>Date</th><th>Platform</th><th>Type</th><th>Topic / description</th><th>Status</th><th>Notes</th><th></th></tr></thead>
+    <tbody>${social.slice().sort((a,b)=>(a.date<b.date?-1:1)).map(c=>`<tr>
+      <td><input type="date" class="so" data-id="${c.id}" data-f="date" value="${esc(c.date)}"></td>
+      <td><input class="so w-32" data-id="${c.id}" data-f="platform" value="${esc(c.platform)}"></td>
+      <td><select class="so" data-id="${c.id}" data-f="type">${['Reel','Post','Story','Live','YouTube'].map(t=>`<option ${c.type===t?'selected':''}>${t}</option>`).join('')}</select></td>
+      <td><input class="so w-full min-w-[200px]" data-id="${c.id}" data-f="topic" value="${esc(c.topic)}"></td>
+      <td><select class="so" data-id="${c.id}" data-f="status">${SS.map(s=>`<option ${c.status===s?'selected':''}>${s}</option>`).join('')}</select></td>
+      <td><input class="so w-full min-w-[120px]" data-id="${c.id}" data-f="notes" value="${esc(c.notes)}"></td>
+      <td><button class="so-del text-danger" data-id="${c.id}">✕</button></td>
+    </tr>`).join('')}</tbody></table></div>
+    <button id="so-add" class="mt-3 bg-panel2 border border-edge rounded-lg px-3 py-1.5 text-sm hover:border-amber">+ Add content row</button>
+  </div>`;
+
+  v.innerHTML=html;
+  const updE=(id,f,val)=>{const a=load('emails',[]);const e=a.find(x=>x.id===id);if(e){e[f]=val;save('emails',a);}};
+  const updS=(id,f,val)=>{const a=load('social',[]);const e=a.find(x=>x.id===id);if(e){e[f]=val;save('social',a);}};
+  v.querySelectorAll('.em').forEach(i=>i.onchange=e=>updE(e.target.dataset.id,e.target.dataset.f,e.target.value));
+  v.querySelectorAll('.so').forEach(i=>i.onchange=e=>updS(e.target.dataset.id,e.target.dataset.f,e.target.value));
+  v.querySelectorAll('.em-del').forEach(b=>b.onclick=e=>{save('emails',load('emails',[]).filter(x=>x.id!==e.target.dataset.id));renderContent(v);});
+  v.querySelectorAll('.so-del').forEach(b=>b.onclick=e=>{save('social',load('social',[]).filter(x=>x.id!==e.target.dataset.id));renderContent(v);});
+  $('em-add').onclick=()=>{const a=load('emails',[]);a.push({id:uid(),seq:'New sequence',num:1,subj:'',status:'Not Written',planned:'',actual:'',open:'',notes:''});save('emails',a);renderContent(v);};
+  $('so-add').onclick=()=>{const a=load('social',[]);a.push({id:uid(),date:today(),platform:'@gabrielsantiago',type:'Post',topic:'',status:'Planned',notes:''});save('social',a);renderContent(v);};
+}
+
+/* ============================================================
+   7. POST-MORTEM
+   ============================================================ */
+function renderPostmortem(v){
+  const s=settings();
+  const pm=load('postmortem',{ratings:{},worked:'',change:'',lesson:''});
+  const {revenue,backers,aov}=totals();
+  const tiers=load('tiers',[]);
+  const live=load('livelog',[]).slice().sort((a,b)=>(a.date<b.date?-1:1));
+
+  // days to public goal
+  let daysToGoal='—', cum=0;
+  for(let i=0;i<live.length;i++){ cum+=Number(live[i].revenue)||0; if(cum>=s.publicGoal){ daysToGoal=i+1+' log entr'+(i===0?'y':'ies'); break; } }
+  const byRev=tiers.map(t=>({n:t.name,r:(Number(t.price)||0)*(Number(t.backers)||0),b:Number(t.backers)||0})).filter(t=>t.b>0);
+  const topRev=byRev.slice().sort((a,b)=>b.r-a.r)[0];
+  const topBk=byRev.slice().sort((a,b)=>b.b-a.b)[0];
+
+  let html=sectionTitle('Post-Mortem','auto-filled stats + your ratings and notes');
+  html+=`<div class="card p-5 mb-5 grid sm:grid-cols-3 gap-4 text-center">
+    ${[['Total raised',money(revenue)],['Total backers',backers],['Final AOV',money2(aov)],
+       ['Days to public goal',daysToGoal],['Top tier by revenue',topRev?topRev.n:'—'],['Top tier by backers',topBk?topBk.n:'—']]
+      .map(([k,val])=>`<div class="bg-ink rounded-lg p-3 border border-edge"><div class="text-xs text-cream/50">${k}</div><div class="text-lg font-bold text-amber">${val}</div></div>`).join('')}
+  </div>`;
+
+  html+=`<div class="card p-5 mb-5">${sectionTitle('Ratings (1–5)')}<div class="grid sm:grid-cols-2 gap-x-8 gap-y-4">
+    ${PM_RATINGS.map(([key,label])=>{
+      const val=pm.ratings[key]??3;
+      return `<div><div class="flex justify-between text-sm mb-1"><span>${label}</span><span class="font-bold text-amber" id="rv-${key}">${val}</span></div>
+        <input type="range" min="1" max="5" step="1" value="${val}" class="pm-rate w-full" data-key="${key}"></div>`;
+    }).join('')}
+  </div></div>`;
+
+  html+=`<div class="card p-5 mb-5 space-y-4">
+    <div><label class="text-sm font-semibold block mb-1">What worked</label><textarea id="pm-worked" rows="4" class="w-full">${esc(pm.worked)}</textarea></div>
+    <div><label class="text-sm font-semibold block mb-1">What to change next time</label><textarea id="pm-change" rows="4" class="w-full">${esc(pm.change)}</textarea></div>
+    <div><label class="text-sm font-semibold block mb-1">Biggest single lesson</label><textarea id="pm-lesson" rows="3" class="w-full">${esc(pm.lesson)}</textarea></div>
+  </div>`;
+
+  html+=`<div class="card p-5">${sectionTitle('Campaign History Paragraph','auto-generated — ready to copy')}
+    <div id="pm-history" class="bg-ink border border-edge rounded-lg p-4 text-sm leading-relaxed text-cream/90 whitespace-pre-wrap"></div>
+    <div class="flex gap-3 mt-3">
+      <button id="pm-copy" class="bg-amber text-ink font-semibold rounded-lg px-4 py-2">Copy paragraph</button>
+      <button id="pm-export" class="bg-panel2 border border-edge rounded-lg px-4 py-2 hover:border-amber">Export post-mortem as text</button>
+    </div>
+  </div>`;
+
+  v.innerHTML=html;
+
+  function genHistory(){
+    const p=load('postmortem',{ratings:{},worked:'',change:'',lesson:''});
+    return `Elevate — Kickstarter campaign by Dr. Gabriel Santiago. Launched ${s.launchDate}, closed ${s.endDate}. `+
+      `Raised ${money(revenue)} from ${backers} backers (final AOV ${money2(aov)}; public goal ${money(s.publicGoal)}, real target ${money(s.realTarget)}). `+
+      (topRev?`Top tier by revenue was ${topRev.n}; `:'')+(topBk?`top tier by backers was ${topBk.n}. `:'')+
+      `Reached the public goal in ${daysToGoal}. `+
+      `Overall rating: ${p.ratings.overall??3}/5. `+
+      (p.worked?`What worked: ${p.worked} `:'')+
+      (p.change?`What to change: ${p.change} `:'')+
+      (p.lesson?`Biggest lesson: ${p.lesson}`:'');
+  }
+  $('pm-history').textContent=genHistory();
+
+  const savePM=()=>{ const p=load('postmortem',{ratings:{},worked:'',change:'',lesson:''});
+    p.worked=$('pm-worked').value; p.change=$('pm-change').value; p.lesson=$('pm-lesson').value; save('postmortem',p);
+    $('pm-history').textContent=genHistory(); };
+  ['pm-worked','pm-change','pm-lesson'].forEach(id=>$(id).oninput=savePM);
+  v.querySelectorAll('.pm-rate').forEach(r=>r.oninput=e=>{
+    const p=load('postmortem',{ratings:{},worked:'',change:'',lesson:''}); p.ratings[e.target.dataset.key]=Number(e.target.value); save('postmortem',p);
+    $('rv-'+e.target.dataset.key).textContent=e.target.value; $('pm-history').textContent=genHistory();
+  });
+  $('pm-copy').onclick=()=>{ navigator.clipboard.writeText($('pm-history').textContent).then(()=>{$('pm-copy').textContent='Copied!';setTimeout(()=>$('pm-copy').textContent='Copy paragraph',1500);}); };
+  $('pm-export').onclick=()=>{
+    const p=load('postmortem',{ratings:{},worked:'',change:'',lesson:''});
+    let txt='ELEVATE CAMPAIGN POST-MORTEM\n'+'='.repeat(40)+'\n\n';
+    txt+=`Total raised: ${money(revenue)}\nTotal backers: ${backers}\nFinal AOV: ${money2(aov)}\nDays to public goal: ${daysToGoal}\n`;
+    txt+=`Top tier by revenue: ${topRev?topRev.n:'—'}\nTop tier by backers: ${topBk?topBk.n:'—'}\n\nRATINGS (1-5)\n`;
+    PM_RATINGS.forEach(([k,l])=>txt+=`  ${l}: ${p.ratings[k]??3}\n`);
+    txt+=`\nWHAT WORKED\n${p.worked||'—'}\n\nWHAT TO CHANGE\n${p.change||'—'}\n\nBIGGEST LESSON\n${p.lesson||'—'}\n\n`;
+    txt+='CAMPAIGN HISTORY\n'+genHistory()+'\n';
+    downloadFile('elevate_postmortem_'+today()+'.txt', txt, 'text/plain');
+  };
+}
+
+/* ============================================================
+   8. SETTINGS
+   ============================================================ */
+function renderSettings(v){
+  const s=settings();
+  const F=[
+    ['publicGoal','Public funding goal ($)','number'],
+    ['realTarget','Real revenue target ($)','number'],
+    ['aovTarget','Target AOV ($)','number'],
+    ['backerTarget','Backers needed','number'],
+    ['launchDate','Launch date','date'],
+    ['endDate','Campaign end date','date'],
+    ['vipMin','$1 VIP minimum','number'],
+    ['vipTarget','$1 VIP target','number'],
+    ['optinsMin','New opt-ins minimum','number'],
+    ['optinsTarget','New opt-ins target','number'],
+    ['kfollowMin','KS pre-launch followers minimum','number'],
+  ];
+  let html=sectionTitle('Settings');
+  html+=`<div class="card p-5 mb-5"><h3 class="font-bold mb-3">Core campaign targets</h3>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    ${F.map(([k,label,t])=>`<div><label class="text-xs text-cream/60 block mb-1">${label}</label><input id="set-${k}" type="${t}" value="${esc(s[k])}" class="w-full"></div>`).join('')}
+    </div>
+    <button id="set-save" class="mt-4 bg-amber text-ink font-semibold rounded-lg px-5 py-2">Save settings</button>
+    <span id="set-msg" class="ml-3 text-good text-sm"></span>
+  </div>`;
+
+  // ---- Cloud sync ----
+  const cfgLocal = load('fbconfig', null);
+  const cfgActive = Sync.config();
+  const signedIn = Sync.ready && Sync.user;
+  html+=`<div class="card p-5 mb-5"><h3 class="font-bold mb-1">☁ Cloud sync (same data on every device)</h3>
+    <p class="text-xs text-cream/50 mb-3">Paste your Firebase config below, then sign in with Google. Your data then lives in the cloud and syncs across all your devices. See CLOUD-SETUP.md for the 10-minute setup. The Firebase web config is not a secret.</p>
+    <label class="text-xs text-cream/60 block mb-1">Firebase config (paste the whole <code>{ ... }</code> object, or just the JSON)</label>
+    <textarea id="fb-config" rows="6" class="w-full font-mono text-xs" placeholder='{
+  "apiKey": "...",
+  "authDomain": "your-project.firebaseapp.com",
+  "projectId": "your-project",
+  "appId": "..."
+}'>${cfgLocal?esc(JSON.stringify(cfgLocal,null,2)):''}</textarea>
+    <div class="flex flex-wrap gap-3 mt-3 items-center">
+      <button id="fb-save" class="bg-amber text-ink font-semibold rounded-lg px-4 py-2">Save config & connect</button>
+      ${cfgActive ? (signedIn
+        ? `<button id="fb-signout" class="bg-panel2 border border-edge rounded-lg px-4 py-2 hover:border-amber">Sign out (${esc(Sync.user.email||'signed in')})</button>`
+        : `<button id="fb-signin" class="bg-good/20 text-good border border-good/40 rounded-lg px-4 py-2 hover:bg-good/30">Sign in with Google</button>`)
+        : '<span class="text-xs text-cream/40">No config saved yet.</span>'}
+      <span class="chip" id="fb-status" style="background:#2c2c2c;color:#8a8478"></span>
+    </div>
+    ${cfgLocal?`<button id="fb-clear" class="mt-3 text-xs text-danger underline">Remove cloud config from this device</button>`:''}
+  </div>`;
+
+  // ---- Kickstarter live numbers ----
+  html+=`<div class="card p-5 mb-5"><h3 class="font-bold mb-1">⤓ Kickstarter live numbers</h3>
+    <p class="text-xs text-cream/50 mb-3">Pull total pledged + backer count straight from your project page through your free Cloudflare Worker. See CLOUD-SETUP.md to deploy the worker (code is in kickstarter-worker.js).</p>
+    <div class="grid gap-3">
+      <div><label class="text-xs text-cream/60 block mb-1">Cloudflare Worker URL</label><input id="set-ksWorkerUrl" value="${esc(s.ksWorkerUrl||'')}" placeholder="https://elevate-ks.YOUR-NAME.workers.dev" class="w-full"></div>
+      <div><label class="text-xs text-cream/60 block mb-1">Kickstarter project URL</label><input id="set-ksProjectUrl" value="${esc(s.ksProjectUrl||'')}" placeholder="https://www.kickstarter.com/projects/.../elevate" class="w-full"></div>
+    </div>
+    <div class="flex flex-wrap gap-3 mt-3">
+      <button id="ks-save" class="bg-amber text-ink font-semibold rounded-lg px-4 py-2">Save</button>
+      <button id="ks-test" class="bg-panel2 border border-edge rounded-lg px-4 py-2 hover:border-amber">Test connection / pull now</button>
+    </div>
+  </div>`;
+
+  html+=`<div class="card p-5 mb-5"><h3 class="font-bold mb-3">Backup & restore</h3>
+    <div class="flex flex-wrap gap-3">
+      <button id="exp-json" class="bg-panel2 border border-edge rounded-lg px-4 py-2 hover:border-amber">⬇ Export all data (JSON)</button>
+      <label class="bg-panel2 border border-edge rounded-lg px-4 py-2 hover:border-amber cursor-pointer">⬆ Import JSON backup<input id="imp-json" type="file" accept="application/json,.json" class="hidden"></label>
+    </div>
+    <p class="text-xs text-cream/50 mt-2">Importing replaces all current data with the contents of the backup file.</p>
+  </div>`;
+
+  html+=`<div class="card p-5 mb-5" style="border-color:#c85a3a55"><h3 class="font-bold mb-2 text-danger">Danger zone</h3>
+    <button id="reset-all" class="bg-danger/20 text-danger border border-danger/40 rounded-lg px-4 py-2 hover:bg-danger/30">Reset all data</button>
+    <p class="text-xs text-cream/50 mt-2">Wipes everything in this browser and re-loads the pre-populated campaign template.</p>
+  </div>`;
+
+  html+=`<div class="text-center text-xs text-cream/40 py-4">Elevate Command Center v1.1 · ${Sync.config()?(Sync.user?'cloud sync on':'cloud sync configured — sign in'):'local-only (set up cloud sync above)'}</div>`;
+
+  v.innerHTML=html;
+
+  $('set-save').onclick=()=>{
+    const ns={...s}; F.forEach(([k,,t])=>{ const val=$('set-'+k).value; ns[k]= t==='number'? (Number(val)||0): val; });
+    save('settings',ns); $('set-msg').textContent='Saved ✓'; setTimeout(()=>$('set-msg').textContent='',1500);
+  };
+
+  // cloud sync handlers
+  const fbStatus=$('fb-status'); if(fbStatus){ const m={off:'Local only',signedout:'Connected · not signed in',syncing:'Syncing…',synced:'Synced ✓',error:'Error'}; fbStatus.textContent=m[Sync.status]||''; }
+  if($('fb-save')) $('fb-save').onclick=()=>{
+    const raw=$('fb-config').value.trim();
+    if(!raw){ alert('Paste your Firebase config first.'); return; }
+    let cfg;
+    try{
+      // accept strict JSON first; otherwise parse the JS object literal Firebase shows
+      // (handles unquoted keys and string values containing colons, e.g. appId "1:23:web:ab")
+      try { cfg = JSON.parse(raw); }
+      catch(_) { cfg = (new Function('return (' + raw + ')'))(); }
+    }catch(e){ alert('That config could not be parsed. Paste the object exactly as Firebase shows it (the part inside the curly braces).\n\n'+e.message); return; }
+    if(!cfg.apiKey || !cfg.projectId){ alert('Config is missing apiKey or projectId.'); return; }
+    save('fbconfig', cfg);
+    alert('Config saved. Connecting… now click "Sign in with Google".');
+    location.reload();
+  };
+  if($('fb-signin')) $('fb-signin').onclick=()=>Sync.signIn();
+  if($('fb-signout')) $('fb-signout').onclick=()=>Sync.signOut();
+  if($('fb-clear')) $('fb-clear').onclick=()=>{ if(confirm('Remove cloud config from THIS device? Your cloud data stays safe; this device just stops syncing until you re-add it.')){ localStorage.removeItem(K('fbconfig')); location.reload(); } };
+
+  // kickstarter handlers
+  const saveKs=()=>{ const ns=settings(); ns.ksWorkerUrl=$('set-ksWorkerUrl').value.trim(); ns.ksProjectUrl=$('set-ksProjectUrl').value.trim(); save('settings',ns); };
+  if($('ks-save')) $('ks-save').onclick=()=>{ saveKs(); alert('Kickstarter settings saved.'); };
+  if($('ks-test')) $('ks-test').onclick=(e)=>{ saveKs(); doKickstarterPull(e.currentTarget); };
+  $('exp-json').onclick=()=>{
+    const dump={}; for(let i=0;i<localStorage.length;i++){ const key=localStorage.key(i); if(key.startsWith('elevate_')) dump[key]=localStorage.getItem(key); }
+    downloadFile('elevate_backup_'+today()+'.json', JSON.stringify(dump,null,2), 'application/json');
+  };
+  $('imp-json').onchange=e=>{
+    const file=e.target.files[0]; if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>{ try{
+      const data=JSON.parse(reader.result);
+      if(!confirm('This will replace all current data. Continue?'))return;
+      Object.keys(localStorage).filter(k=>k.startsWith('elevate_')).forEach(k=>localStorage.removeItem(k));
+      Object.entries(data).forEach(([k,val])=>{ if(k.startsWith('elevate_')) localStorage.setItem(k, val); });
+      alert('Backup restored.'); location.reload();
+    }catch(err){ alert('Could not read that file: '+err.message); } };
+    reader.readAsText(file);
+  };
+  $('reset-all').onclick=()=>{
+    if(!confirm('Reset ALL data and reload the campaign template? This cannot be undone.'))return;
+    if(!confirm('Are you absolutely sure? Everything you have entered will be erased.'))return;
+    Object.keys(localStorage).filter(k=>k.startsWith('elevate_')).forEach(k=>localStorage.removeItem(k));
+    location.reload();
+  };
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+ensureSeed();
+renderNav();
+render();
+Sync.init();
+</script>
+</body>
+</html>
