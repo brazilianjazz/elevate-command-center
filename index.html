@@ -194,6 +194,7 @@ const Sync = {
       const d = doc.data();
       if(d.rev && d.rev === this.myRev) return;  // ignore our own write echo
       this.apply(d.data);
+      ensureCycle();                  // if the incoming data is still on the old cycle, roll it forward (and re-push)
       this.setStatus('synced');
       try{ render(); }catch(e){}
     }, err=>{ console.warn(err); this.setStatus('error'); });
